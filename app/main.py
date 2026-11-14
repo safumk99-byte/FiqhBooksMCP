@@ -106,6 +106,65 @@ def save_research_note(title: str, body: str, book_id: int | None = None, tags: 
         ).fetchone()
     return dict(row)
 
+
+import httpx
+
+TURATH_API = "https://api.turath.io"
+TURATH_FILES = "https://files.turath.io"
+TURATH_TIMEOUT = httpx.Timeout(25.0, connect=10.0)
+
+def _turath_get(url: str, params: dict | None = None):
+    """Fetch source data from Turath; return upstream attribution with the payload."""
+    try:
+        with httpx.Client(timeout=TURATH_TIMEOUT, follow_redirects=True) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+        if isinstance(data, dict):
+            return data
+        return {"data": data, "source": {"provider": "turath", "url": str(response.url)}}
+    except httpx.HTTPStatusError as exc:
+        raise ValueError(f"Turath API returned HTTP {exc.response.status_code}") from exc
+    except (httpx.RequestError, ValueError) as exc:
+        raise ValueError(f"Turath request failed: {str(exc)[:300]}") from exc
+
+@mcp.tool()
+def turath_search(query: str, author: int | None = None, book: int | None = None,
+                  category: int | None = None, page: int | None = None,
+                  precision: int | None = None, sort_field: str | None = None) -> dict:
+    """Search Turath's Arabic book catalog and indexed text; returns source references."""
+    params = {"q": query, "ver": "3"}
+    if author is not None: params["author"] = author
+    if book is not None: params["book"] = book
+    if category is not None: params["cat_id"] = category
+    if page is not None: params["page"] = page
+    if precision is not None: params["precision"] = precision
+    if sort_field is not None: params["sortField"] = sort_field
+    return _turath_get(f"{TURATH_API}/search", params)
+
+@mcp.tool()
+def turath_get_book_info(book_id: int) -> dict:
+    """Get Turath book metadata, headings, page map, and volume indexes."""
+    return _turath_get(f"{TURATH_API}/book", {"id": book_id, "include": "indexes", "ver": "3"})
+
+@mcp.tool()
+def turath_get_page(book_id: int, page_number: int) -> dict:
+    """Get one parsed Turath book page with its text and source attribution."""
+    return _turath_get(f"{TURATH_API}/page", {"book_id": book_id, "pg": page_number, "ver": "3"})
+
+@mcp.tool()
+def turath_get_book_file(book_id: int) -> dict:
+    """Get a complete Turath book JSON dump, including parsed pages; may be large."""
+    if book_id <= 0:
+        raise ValueError("book_id must be a positive integer")
+    return _turath_get(f"{TURATH_FILES}/books/{book_id}.json")
+
+@mcp.tool()
+def turath_get_author(author_id: int) -> dict:
+    """Get Turath author biography and metadata by author ID."""
+    return _turath_get(f"{TURATH_API}/author", {"id": author_id, "ver": "3"})
+
+
 class MCPAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path.startswith("/mcp"):
