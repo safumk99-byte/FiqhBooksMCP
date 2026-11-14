@@ -8,6 +8,8 @@ from mcp.server.fastmcp import FastMCP
 from app.db import open_pool, close_pool, initialize_schema, connection
 
 mcp = FastMCP("FiqhBooksMCP", stateless_http=True, json_response=True)
+# Mount prefix is /mcp, so the inner MCP route must be /.
+mcp_app = mcp.streamable_http_app(streamable_http_path="/")
 
 @mcp.tool()
 def list_books(limit: int = 50) -> list[dict]:
@@ -113,12 +115,15 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     open_pool()
     initialize_schema()
-    yield
-    close_pool()
+    try:
+        async with mcp.session_manager.run():
+            yield
+    finally:
+        close_pool()
 
-app = FastAPI(title="FiqhBooksMCP", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="FiqhBooksMCP", version="0.1.1", lifespan=lifespan)
 app.add_middleware(MCPAuthMiddleware)
-app.mount("/mcp", mcp.streamable_http_app())
+app.mount("/mcp", mcp_app)
 
 @app.get("/health")
 def health():
