@@ -5,9 +5,18 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
 
-mcp = FastMCP("FiqhBooksMCP", stateless_http=True, json_response=True, streamable_http_path="/")
+mcp = FastMCP(
+    "FiqhBooksMCP",
+    stateless_http=True,
+    json_response=True,
+    streamable_http_path="/",
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=["fiqhbooksmcp-1.onrender.com", "fiqhbooksmcp-1.onrender.com:*"]
+    ),
+)
 
 @mcp.tool()
 def list_books(limit: int = 50) -> list[dict]:
@@ -121,17 +130,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FiqhBooksMCP", version="0.1.1", lifespan=lifespan)
 app.add_middleware(MCPAuthMiddleware)
-from mcp.server.transport_security import TransportSecuritySettings
-
-mcp_asgi_app = mcp._mcp_server.streamable_http_app(
-    streamable_http_path="/",
-    json_response=True,
-    stateless_http=True,
-    transport_security=TransportSecuritySettings(
-        allowed_hosts=["fiqhbooksmcp-1.onrender.com", "fiqhbooksmcp-1.onrender.com:*"]
-    ),
-)
-app.mount("/mcp", mcp_asgi_app)
+app.mount("/mcp", mcp.streamable_http_app())
 
 @app.get("/health")
 def health():
