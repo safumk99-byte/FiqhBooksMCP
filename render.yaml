@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: fiqhbooks-mcp
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: MCP_BEARER_TOKEN
+        generateValue: true
+      - key: APP_ENV
+        value: production
