@@ -62,13 +62,34 @@ CREATE TABLE IF NOT EXISTS research_notes (
 );
 """
 
+def _check_connection(conn) -> None:
+    """Reject stale or already-closed pooled connections before handing them to tools."""
+    conn.execute("SELECT 1")
+
 def open_pool() -> None:
     global _pool
     dsn = os.environ["DATABASE_URL"]
-    # psycopg accepts Neon pooled URLs; require TLS for hosted Postgres.
     if "sslmode=" not in dsn:
         dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
-    _pool = ConnectionPool(conninfo=dsn, min_size=1, max_size=5, kwargs={"row_factory": dict_row}, open=True)
+
+    _pool = ConnectionPool(
+        conninfo=dsn,
+        min_size=1,
+        max_size=5,
+        kwargs={
+            "row_factory": dict_row,
+            "connect_timeout": 15,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+        },
+        check=_check_connection,
+        max_lifetime=300,
+        max_idle=60,
+        reconnect_timeout=30,
+        open=True,
+    )
 
 def close_pool() -> None:
     global _pool
