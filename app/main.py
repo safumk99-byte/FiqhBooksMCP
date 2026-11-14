@@ -7,9 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from mcp.server.fastmcp import FastMCP
 from app.db import open_pool, close_pool, initialize_schema, connection
 
-mcp = FastMCP("FiqhBooksMCP", stateless_http=True, json_response=True)
-# Mount prefix is /mcp, so the inner MCP route must be /.
-mcp_app = mcp.streamable_http_app(streamable_http_path="/")
+mcp = FastMCP("FiqhBooksMCP", stateless_http=True, json_response=True, streamable_http_path="/")
 
 @mcp.tool()
 def list_books(limit: int = 50) -> list[dict]:
@@ -123,7 +121,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FiqhBooksMCP", version="0.1.1", lifespan=lifespan)
 app.add_middleware(MCPAuthMiddleware)
-app.mount("/mcp", mcp_app)
+app.mount("/mcp", mcp.streamable_http_app())
 
 @app.get("/health")
 def health():
