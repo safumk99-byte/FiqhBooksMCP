@@ -1,5 +1,6 @@
 import os
 from contextlib import contextmanager
+from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 _pool: ConnectionPool | None = None
@@ -67,7 +68,7 @@ def open_pool() -> None:
     # psycopg accepts Neon pooled URLs; require TLS for hosted Postgres.
     if "sslmode=" not in dsn:
         dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
-    _pool = ConnectionPool(conninfo=dsn, min_size=1, max_size=5, open=True)
+    _pool = ConnectionPool(conninfo=dsn, min_size=1, max_size=5, kwargs={"row_factory": dict_row}, open=True)
 
 def close_pool() -> None:
     global _pool
