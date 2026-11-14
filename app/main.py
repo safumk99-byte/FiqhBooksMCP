@@ -1,4 +1,5 @@
 import os
+import hmac
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -101,7 +102,10 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/mcp"):
             expected = os.getenv("MCP_BEARER_TOKEN", "")
             supplied = request.headers.get("authorization", "")
-            if not expected or supplied != f"Bearer {expected}":
+            query_token = request.query_params.get("token", "")
+            header_valid = bool(expected) and hmac.compare_digest(supplied, f"Bearer {expected}")
+            query_valid = bool(expected) and hmac.compare_digest(query_token, expected)
+            if not (header_valid or query_valid):
                 return JSONResponse({"error": "Unauthorized"}, status_code=401)
         return await call_next(request)
 
