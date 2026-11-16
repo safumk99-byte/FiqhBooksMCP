@@ -20,6 +20,12 @@ _QUERY_EXPANSIONS = {
     "ഇഖാമത്ത്": "إقامة",
     "വതൻ": "وطن",
     "qasr": "قصر سفر",
+    "qasar": "قصر الصلاة السفر",
+    "solat qasar": "قصر الصلاة السفر",
+    "qasar solat": "قصر الصلاة السفر",
+    "jamak solat musafir": "جمع الصلاة السفر",
+    "solat jamak": "جمع الصلاة",
+    "musafir": "مسافر سفر",
     "jam": "جمع",
     "travel": "سفر",
     "watan": "وطن",
@@ -55,3 +61,13 @@ def expand_search_query(query: str) -> list[str]:
             candidates.append(normalize_arabic_text(expansion))
 
     return list(dict.fromkeys(item for item in candidates if item))
+
+
+def build_fallback_search(tokens: list[str]) -> tuple[str, int]:
+    """Build an OR-prefix tsquery and its minimum distinct-term coverage threshold."""
+    unique_tokens = list(dict.fromkeys(token for token in tokens if token))
+    if not unique_tokens:
+        return "", 0
+    tsquery = " | ".join(f"{token}:*" for token in unique_tokens)
+    minimum_matches = 2 if len(unique_tokens) >= 3 else 1
+    return tsquery, minimum_matches
