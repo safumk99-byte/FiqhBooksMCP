@@ -107,7 +107,7 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
             # Require multi-token coverage for longer queries to reduce OR-fallback noise.
             tokens = []
             for alternative in alternatives:
-                tokens.extend(re.findall(r"[\\w]+", alternative, flags=re.UNICODE))
+                tokens.extend(re.findall(r"[\w]+", alternative, flags=re.UNICODE))
             tokens = list(dict.fromkeys(token for token in tokens if token))
             tsquery, minimum_matches = build_fallback_search(tokens)
             if not tsquery:
