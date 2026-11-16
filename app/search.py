@@ -24,6 +24,8 @@ _QUERY_EXPANSIONS = {
     "solat qasar": "قصر الصلاة السفر",
     "qasar solat": "قصر الصلاة السفر",
     "jamak solat musafir": "جمع الصلاة السفر",
+    "jamak taqdim": "جمع التقديم",
+    "jamak takhir": "جمع التأخير",
     "solat jamak": "جمع الصلاة",
     "musafir": "مسافر سفر",
     "jam": "جمع",
