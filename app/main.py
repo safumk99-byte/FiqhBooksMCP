@@ -107,7 +107,7 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
             # OR fallback prevents natural-language queries from requiring every token.
             tokens = []
             for alternative in alternatives:
-                tokens.extend(re.findall(r"[\\w]+", alternative, flags=re.UNICODE))
+                tokens.extend(re.findall(r"[\w]+", alternative, flags=re.UNICODE))
             tokens = list(dict.fromkeys(token for token in tokens if token))
             tsquery = " | ".join(f"{token}:*" for token in tokens)
             if not tsquery:
