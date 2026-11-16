@@ -51,7 +51,7 @@ def expand_search_query(query: str) -> list[str]:
     candidates = [original]
     lowered = original.casefold()
     for phrase, expansion in _QUERY_EXPANSIONS.items():
-        if phrase.casefold() in lowered:
+        if normalize_arabic_text(phrase).casefold() in lowered:
             candidates.append(normalize_arabic_text(expansion))
 
     return list(dict.fromkeys(item for item in candidates if item))
