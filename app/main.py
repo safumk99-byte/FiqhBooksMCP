@@ -87,21 +87,26 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
         return []
 
     with connection() as conn:
-        # Keep exact all-terms matching as the precision-first path.
-        rows = conn.execute(
-            """SELECT p.id, b.title AS book_title, e.title AS edition_title,
-                      p.page_id, pg.page_number, p.locator, p.content,
-                      ts_rank(p.search_vector_ar,
-                              plainto_tsquery('simple', fiqh_normalize_arabic(%s))) AS rank
-               FROM passages p
-               JOIN editions e ON e.id=p.edition_id
-               JOIN books b ON b.id=e.book_id
-               LEFT JOIN pages pg ON pg.id=p.page_id
-               WHERE p.search_vector_ar @@
-                     plainto_tsquery('simple', fiqh_normalize_arabic(%s))
-               ORDER BY rank DESC, p.id DESC LIMIT %s""",
-            (alternatives[0], alternatives[0], limit),
-        ).fetchall()
+        # Try exact all-terms matching for the original query and each explicit
+        # language expansion before using the broader OR-prefix fallback.
+        rows = []
+        for alternative in alternatives:
+            rows = conn.execute(
+                """SELECT p.id, b.title AS book_title, e.title AS edition_title,
+                          p.page_id, pg.page_number, p.locator, p.content,
+                          ts_rank(p.search_vector_ar,
+                                  plainto_tsquery('simple', fiqh_normalize_arabic(%s))) AS rank
+                   FROM passages p
+                   JOIN editions e ON e.id=p.edition_id
+                   JOIN books b ON b.id=e.book_id
+                   LEFT JOIN pages pg ON pg.id=p.page_id
+                   WHERE p.search_vector_ar @@
+                         plainto_tsquery('simple', fiqh_normalize_arabic(%s))
+                   ORDER BY rank DESC, p.id DESC LIMIT %s""",
+                (alternative, alternative, limit),
+            ).fetchall()
+            if rows:
+                break
 
         if not rows:
             # Require multi-token coverage for longer queries to reduce OR-fallback noise.
