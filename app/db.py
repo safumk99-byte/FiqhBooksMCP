@@ -6,6 +6,24 @@ from psycopg_pool import ConnectionPool
 _pool: ConnectionPool | None = None
 
 SCHEMA_SQL = """
+CREATE OR REPLACE FUNCTION fiqh_normalize_arabic(input_text TEXT)
+RETURNS TEXT
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT translate(
+        regexp_replace(
+            coalesce(input_text, ''),
+            '[ًٌٍَُِّْٰۖۗۘۙۚۛۜ۞ـ]',
+            '',
+            'g'
+        ),
+        'أإآٱىؤئ',
+        'اااايوي'
+    );
+$$;
+
 CREATE TABLE IF NOT EXISTS books (
     id BIGSERIAL PRIMARY KEY,
     title TEXT NOT NULL,
@@ -41,7 +59,13 @@ CREATE TABLE IF NOT EXISTS passages (
     search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(content, ''))) STORED,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE passages
+    ADD COLUMN IF NOT EXISTS search_vector_ar TSVECTOR
+    GENERATED ALWAYS AS (
+        to_tsvector('simple', fiqh_normalize_arabic(content))
+    ) STORED;
 CREATE INDEX IF NOT EXISTS passages_search_idx ON passages USING GIN(search_vector);
+CREATE INDEX IF NOT EXISTS passages_search_ar_idx ON passages USING GIN(search_vector_ar);
 CREATE TABLE IF NOT EXISTS citations (
     id BIGSERIAL PRIMARY KEY,
     passage_id BIGINT REFERENCES passages(id) ON DELETE SET NULL,
