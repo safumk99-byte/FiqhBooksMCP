@@ -21,3 +21,17 @@ def test_fallback_deduplicates_tokens():
 
 def test_fallback_returns_empty_for_no_tokens():
     assert build_fallback_search([]) == ("", 0)
+
+
+def test_malay_jamak_travel_phrase_expands_to_related_arabic_terms():
+    from app.search import expand_search_query
+
+    expanded = expand_search_query("jamak solat musafir")
+    assert "جمع الصلاة السفر" in expanded
+
+
+def test_malay_qasar_phrase_expands_to_related_arabic_terms():
+    from app.search import expand_search_query
+
+    expanded = expand_search_query("solat qasar")
+    assert "قصر الصلاة السفر" in expanded
