@@ -1,5 +1,6 @@
 import os
 import hmac
+import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -7,6 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
+from app.search import expand_search_query
 
 mcp = FastMCP(
     "FiqhBooksMCP",
@@ -78,21 +80,50 @@ def add_passage(edition_id: int, content: str, page_id: int | None = None, locat
 
 @mcp.tool()
 def search_passages(query: str, limit: int = 20) -> list[dict]:
-    """Search indexed Arabic or other text passages; returns source locators."""
+    """Search normalized Arabic text, with a conservative multilingual fallback."""
     limit = max(1, min(limit, 100))
+    alternatives = expand_search_query(query)
+    if not alternatives:
+        return []
+
     with connection() as conn:
+        # Keep exact all-terms matching as the precision-first path.
         rows = conn.execute(
             """SELECT p.id, b.title AS book_title, e.title AS edition_title,
                       p.page_id, pg.page_number, p.locator, p.content,
-                      ts_rank(p.search_vector, plainto_tsquery('simple', %s)) AS rank
+                      ts_rank(p.search_vector_ar,
+                              plainto_tsquery('simple', fiqh_normalize_arabic(%s))) AS rank
                FROM passages p
                JOIN editions e ON e.id=p.edition_id
                JOIN books b ON b.id=e.book_id
                LEFT JOIN pages pg ON pg.id=p.page_id
-               WHERE p.search_vector @@ plainto_tsquery('simple', %s)
+               WHERE p.search_vector_ar @@
+                     plainto_tsquery('simple', fiqh_normalize_arabic(%s))
                ORDER BY rank DESC, p.id DESC LIMIT %s""",
-            (query, query, limit),
+            (alternatives[0], alternatives[0], limit),
         ).fetchall()
+
+        if not rows:
+            # OR fallback prevents natural-language queries from requiring every token.
+            tokens = []
+            for alternative in alternatives:
+                tokens.extend(re.findall(r"[\\w]+", alternative, flags=re.UNICODE))
+            tokens = list(dict.fromkeys(token for token in tokens if token))
+            tsquery = " | ".join(f"{token}:*" for token in tokens)
+            if not tsquery:
+                return []
+            rows = conn.execute(
+                """SELECT p.id, b.title AS book_title, e.title AS edition_title,
+                          p.page_id, pg.page_number, p.locator, p.content,
+                          ts_rank(p.search_vector_ar, to_tsquery('simple', %s)) AS rank
+                   FROM passages p
+                   JOIN editions e ON e.id=p.edition_id
+                   JOIN books b ON b.id=e.book_id
+                   LEFT JOIN pages pg ON pg.id=p.page_id
+                   WHERE p.search_vector_ar @@ to_tsquery('simple', %s)
+                   ORDER BY rank DESC, p.id DESC LIMIT %s""",
+                (tsquery, tsquery, limit),
+            ).fetchall()
     return [dict(r) for r in rows]
 
 @mcp.tool()
