@@ -1,6 +1,5 @@
 import os
 import hmac
-import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -8,7 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
-from app.search import expand_search_query
+from app.search import expand_search_query, build_fallback_search
 
 mcp = FastMCP(
     "FiqhBooksMCP",
@@ -104,25 +103,33 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
         ).fetchall()
 
         if not rows:
-            # OR fallback prevents natural-language queries from requiring every token.
+            # Require multi-token coverage for longer queries to reduce OR-fallback noise.
             tokens = []
             for alternative in alternatives:
-                tokens.extend(re.findall(r"[\w]+", alternative, flags=re.UNICODE))
+                tokens.extend(re.findall(r"[\\w]+", alternative, flags=re.UNICODE))
             tokens = list(dict.fromkeys(token for token in tokens if token))
-            tsquery = " | ".join(f"{token}:*" for token in tokens)
+            tsquery, minimum_matches = build_fallback_search(tokens)
             if not tsquery:
                 return []
             rows = conn.execute(
                 """SELECT p.id, b.title AS book_title, e.title AS edition_title,
                           p.page_id, pg.page_number, p.locator, p.content,
+                          coverage.matched_terms,
                           ts_rank(p.search_vector_ar, to_tsquery('simple', %s)) AS rank
                    FROM passages p
                    JOIN editions e ON e.id=p.edition_id
                    JOIN books b ON b.id=e.book_id
                    LEFT JOIN pages pg ON pg.id=p.page_id
+                   CROSS JOIN LATERAL (
+                       SELECT count(*)::int AS matched_terms
+                       FROM unnest(%s::text[]) AS q(token)
+                       WHERE p.search_vector_ar @@ to_tsquery('simple', q.token || ':*')
+                   ) AS coverage
                    WHERE p.search_vector_ar @@ to_tsquery('simple', %s)
-                   ORDER BY rank DESC, p.id DESC LIMIT %s""",
-                (tsquery, tsquery, limit),
+                     AND coverage.matched_terms >= %s
+                   ORDER BY coverage.matched_terms DESC, rank DESC, p.id DESC
+                   LIMIT %s""",
+                (tsquery, tokens, tsquery, minimum_matches, limit),
             ).fetchall()
     return [dict(r) for r in rows]
 
