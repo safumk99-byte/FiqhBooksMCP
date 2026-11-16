@@ -15,7 +15,7 @@ AS $$
     SELECT translate(
         regexp_replace(
             coalesce(input_text, ''),
-            '[ًٌٍَُِّْٰۖۗۘۙۚۛۜ۞ـ]',
+            '[ً-ٰٟۖ-ۭـ]',
             '',
             'g'
         ),
