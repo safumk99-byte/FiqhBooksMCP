@@ -32,7 +32,10 @@ def _kind(label: str) -> tuple[str, str | None]:
         return "hashiyah", author or None
     # Explicit named work label: a commentary/source layer, not inferred from
     # the page's principal author metadata.
-    return "sharh", None
+    known_shuruh = {"مغني المحتاج", "تحفة المحتاج", "فتح الوهاب"}
+    if normalized in known_shuruh:
+        return "sharh", None
+    return "unclassified", None
 
 def parse_turath_page(content: str) -> list[dict]:
     """Return ordered source segments; ambiguous leading text stays unclassified."""
@@ -55,7 +58,8 @@ def parse_turath_page(content: str) -> list[dict]:
         }] if text else [])
 
     result: list[dict] = []
-    prefix = _clean(_DIVIDERS.sub(" ", raw[:markers[0].start()]))
+    prefix_raw = _TITLE_MARKER.sub(" ", raw[:markers[0].start()])
+    prefix = _clean(_DIVIDERS.sub(" ", prefix_raw))
     if prefix:
         result.append({
             "segment_order": 1,
