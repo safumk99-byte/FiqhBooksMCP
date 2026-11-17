@@ -1,6 +1,7 @@
 import os
 import hmac
 import re
+import json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -9,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
 from app.search import expand_search_query, build_fallback_search
+from app.segments import parse_turath_page
 
 mcp = FastMCP(
     "FiqhBooksMCP",
@@ -197,6 +199,141 @@ def turath_get_page(book_id: int, page_number: int) -> dict:
     return _turath_get(f"{TURATH_API}/page", {"book_id": book_id, "pg": page_number, "ver": "3"})
 
 @mcp.tool()
+
+
+@mcp.tool()
+def turath_index_page(book_id: int, sequential_index: int) -> dict:
+    """Fetch one Turath page and idempotently index its explicitly marked source segments."""
+    if book_id <= 0 or sequential_index <= 0:
+        raise ValueError("book_id and sequential_index must be positive integers")
+
+    payload = _turath_get(
+        f"{TURATH_API}/page",
+        {"book_id": book_id, "pg": sequential_index, "ver": "3"},
+    )
+    raw_meta = payload.get("meta", {})
+    if isinstance(raw_meta, str):
+        try:
+            metadata = json.loads(raw_meta)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Turath page metadata is not valid JSON") from exc
+    elif isinstance(raw_meta, dict):
+        metadata = raw_meta
+    else:
+        metadata = {}
+
+    page_text = payload.get("text", "")
+    if not isinstance(page_text, str) or not page_text.strip():
+        raise ValueError("Turath returned an empty page; nothing was indexed")
+    turath_page_id = metadata.get("page_id")
+    if turath_page_id is None:
+        raise ValueError("Turath page metadata has no page_id; refusing to index without a stable locator")
+
+    segments = parse_turath_page(page_text)
+    if not segments:
+        raise ValueError("No non-empty text segments were extracted; original page was not indexed")
+
+    with connection() as conn:
+        page = conn.execute(
+            """INSERT INTO turath_source_pages
+               (turath_book_id,sequential_index,turath_page_id,volume,printed_page,
+                book_title,page_author,page_metadata,raw_text,indexed_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,now())
+               ON CONFLICT (turath_book_id,sequential_index) DO UPDATE SET
+                 turath_page_id=EXCLUDED.turath_page_id,
+                 volume=EXCLUDED.volume,
+                 printed_page=EXCLUDED.printed_page,
+                 book_title=EXCLUDED.book_title,
+                 page_author=EXCLUDED.page_author,
+                 page_metadata=EXCLUDED.page_metadata,
+                 raw_text=EXCLUDED.raw_text,
+                 indexed_at=now()
+               RETURNING id""",
+            (
+                book_id, sequential_index, int(turath_page_id),
+                str(metadata.get("vol") or ""),
+                str(metadata.get("page") or ""),
+                metadata.get("book_name"),
+                metadata.get("author_name"),
+                json.dumps(metadata, ensure_ascii=False),
+                page_text,
+            ),
+        ).fetchone()
+        source_page_id = page["id"]
+        conn.execute("DELETE FROM turath_segments WHERE source_page_id=%s", (source_page_id,))
+        for segment in segments:
+            conn.execute(
+                """INSERT INTO turath_segments
+                   (source_page_id,segment_order,segment_type,segment_title,
+                    segment_author,source_marker,attribution_method,content)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    source_page_id, segment["segment_order"], segment["segment_type"],
+                    segment.get("segment_title"), segment.get("segment_author"),
+                    segment.get("source_marker"), segment["attribution_method"],
+                    segment["content"],
+                ),
+            )
+
+    return {
+        "status": "indexed",
+        "turath_book_id": book_id,
+        "turath_page_id": int(turath_page_id),
+        "sequential_index": sequential_index,
+        "volume": str(metadata.get("vol") or ""),
+        "printed_page": str(metadata.get("page") or ""),
+        "segments_indexed": len(segments),
+        "segment_types": [segment["segment_type"] for segment in segments],
+        "idempotent": True,
+    }
+
+
+@mcp.tool()
+def search_turath_segments(
+    query: str,
+    book_id: int | None = None,
+    segment_type: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Search independently indexed Turath source segments with their page and layer attribution."""
+    limit = max(1, min(limit, 100))
+    if segment_type and segment_type not in {
+        "matn", "sharh", "hashiyah", "editorial", "fatwa", "unclassified"
+    }:
+        raise ValueError("Unsupported segment_type")
+    alternatives = expand_search_query(query)
+    if not alternatives:
+        return []
+
+    with connection() as conn:
+        rows = []
+        for alternative in alternatives:
+            rows = conn.execute(
+                """SELECT
+                       p.turath_book_id, p.turath_page_id, p.sequential_index,
+                       p.volume, p.printed_page, p.book_title, p.page_author,
+                       s.segment_order, s.segment_type, s.segment_title,
+                       s.segment_author, s.source_marker, s.attribution_method,
+                       s.content,
+                       ts_rank(s.search_vector_ar,
+                           plainto_tsquery('simple', fiqh_normalize_arabic(%s))) AS rank
+                   FROM turath_segments s
+                   JOIN turath_source_pages p ON p.id=s.source_page_id
+                   WHERE s.search_vector_ar @@
+                         plainto_tsquery('simple', fiqh_normalize_arabic(%s))
+                     AND (%s IS NULL OR p.turath_book_id=%s)
+                     AND (%s IS NULL OR s.segment_type=%s)
+                   ORDER BY rank DESC, p.turath_book_id, p.sequential_index,
+                            s.segment_order
+                   LIMIT %s""",
+                (alternative, alternative, book_id, book_id,
+                 segment_type, segment_type, limit),
+            ).fetchall()
+            if rows:
+                break
+    return [dict(row) for row in rows]
+
+
 def turath_get_book_file(book_id: int) -> dict:
     """Get a complete Turath book JSON dump, including parsed pages; may be large."""
     if book_id <= 0:
