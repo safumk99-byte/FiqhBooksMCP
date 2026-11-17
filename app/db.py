@@ -66,6 +66,44 @@ ALTER TABLE passages
     ) STORED;
 CREATE INDEX IF NOT EXISTS passages_search_idx ON passages USING GIN(search_vector);
 CREATE INDEX IF NOT EXISTS passages_search_ar_idx ON passages USING GIN(search_vector_ar);
+
+CREATE TABLE IF NOT EXISTS turath_source_pages (
+    id BIGSERIAL PRIMARY KEY,
+    turath_book_id BIGINT NOT NULL,
+    sequential_index INTEGER NOT NULL,
+    turath_page_id BIGINT NOT NULL,
+    volume TEXT,
+    printed_page TEXT,
+    book_title TEXT,
+    page_author TEXT,
+    page_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    raw_text TEXT NOT NULL,
+    indexed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (turath_book_id, sequential_index),
+    UNIQUE (turath_book_id, turath_page_id)
+);
+CREATE TABLE IF NOT EXISTS turath_segments (
+    id BIGSERIAL PRIMARY KEY,
+    source_page_id BIGINT NOT NULL REFERENCES turath_source_pages(id) ON DELETE CASCADE,
+    segment_order INTEGER NOT NULL,
+    segment_type TEXT NOT NULL DEFAULT 'unclassified'
+        CHECK (segment_type IN ('matn','sharh','hashiyah','editorial','fatwa','unclassified')),
+    segment_title TEXT,
+    segment_author TEXT,
+    source_marker TEXT,
+    attribution_method TEXT NOT NULL,
+    content TEXT NOT NULL,
+    search_vector_ar TSVECTOR GENERATED ALWAYS AS (
+        to_tsvector('simple', fiqh_normalize_arabic(content))
+    ) STORED,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (source_page_id, segment_order)
+);
+CREATE INDEX IF NOT EXISTS turath_segments_search_ar_idx
+    ON turath_segments USING GIN(search_vector_ar);
+CREATE INDEX IF NOT EXISTS turath_segments_type_idx
+    ON turath_segments(segment_type);
+
 CREATE TABLE IF NOT EXISTS citations (
     id BIGSERIAL PRIMARY KEY,
     passage_id BIGINT REFERENCES passages(id) ON DELETE SET NULL,
