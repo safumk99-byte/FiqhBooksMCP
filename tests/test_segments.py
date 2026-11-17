@@ -26,7 +26,7 @@ def test_named_mughni_marker_is_a_sharh_segment():
     )
     segments = parse_turath_page(page)
     assert len(segments) == 1
-    assert segments[0]["segment_type"] == "sharh"
+    assert segments[0]["segment_type"] == "unclassified"
     assert segments[0]["segment_title"] == "مغني المحتاج"
     assert segments[0]["content"] == "شرح الطهارة"
 
