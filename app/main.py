@@ -199,9 +199,6 @@ def turath_get_page(book_id: int, page_number: int) -> dict:
     return _turath_get(f"{TURATH_API}/page", {"book_id": book_id, "pg": page_number, "ver": "3"})
 
 @mcp.tool()
-
-
-@mcp.tool()
 def turath_index_page(book_id: int, sequential_index: int) -> dict:
     """Fetch one Turath page and idempotently index its explicitly marked source segments."""
     if book_id <= 0 or sequential_index <= 0:
@@ -334,6 +331,7 @@ def search_turath_segments(
     return [dict(row) for row in rows]
 
 
+@mcp.tool()
 def turath_get_book_file(book_id: int) -> dict:
     """Get a complete Turath book JSON dump, including parsed pages; may be large."""
     if book_id <= 0:
