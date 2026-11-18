@@ -53,10 +53,25 @@ def _telegram_request(method: str, token: str, payload: dict | None = None) -> d
         )
         response.raise_for_status()
         body = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise ValueError(f"Telegram {method} request failed") from exc
+    except httpx.HTTPStatusError as exc:
+        # Telegram's error description is safe to log; never include request URLs,
+        # which contain the bot token.
+        try:
+            error_body = exc.response.json()
+            description = str(error_body.get("description") or "HTTP error")
+        except (ValueError, AttributeError):
+            description = "HTTP error"
+        raise ValueError(
+            f"Telegram {method} returned HTTP {exc.response.status_code}: {description[:160]}"
+        ) from None
+    except (httpx.RequestError, ValueError) as exc:
+        # Exception strings from HTTP clients can contain the token-bearing URL.
+        raise ValueError(
+            f"Telegram {method} request failed ({type(exc).__name__})"
+        ) from None
     if not body.get("ok"):
-        raise ValueError(f"Telegram {method} request was rejected")
+        description = str(body.get("description") or "request rejected")
+        raise ValueError(f"Telegram {method} rejected the request: {description[:160]}")
     return body.get("result") or {}
 
 
