@@ -46,8 +46,17 @@ def initialize_telegram_schema() -> None:
                 ADD COLUMN IF NOT EXISTS audit JSONB NOT NULL DEFAULT '{}'::jsonb;
             ALTER TABLE telegram_imports
                 ADD COLUMN IF NOT EXISTS file_id TEXT;
+            ALTER TABLE telegram_imports
+                DROP CONSTRAINT IF EXISTS telegram_imports_status_check;
+            ALTER TABLE telegram_imports
+                ADD CONSTRAINT telegram_imports_status_check
+                CHECK (status IN ('queued','processing','imported','failed'));
+            ALTER TABLE telegram_imports
+                ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE telegram_imports
+                ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ;
             CREATE INDEX IF NOT EXISTS telegram_imports_status_idx
-                ON telegram_imports(status);
+                ON telegram_imports(status, created_at);
         """)
 
 
@@ -88,14 +97,14 @@ def _claim_file(file_unique_id: str, file_id: str, chat_id: int, message_id: int
         row = conn.execute(
             """INSERT INTO telegram_imports
                (file_unique_id,file_id,chat_id,message_id,file_name,file_size,status)
-               VALUES (%s,%s,%s,%s,%s,%s,'processing')
+               VALUES (%s,%s,%s,%s,%s,%s,'queued')
                ON CONFLICT (file_unique_id) DO UPDATE SET
                    file_id=EXCLUDED.file_id,
                    chat_id=EXCLUDED.chat_id,
                    message_id=EXCLUDED.message_id,
                    file_name=EXCLUDED.file_name,
                    file_size=EXCLUDED.file_size,
-                   status='processing', error=NULL, updated_at=now()
+                   status='queued', error=NULL, processing_started_at=NULL, updated_at=now()
                WHERE telegram_imports.status IN ('failed','imported')
                RETURNING id""",
             (file_unique_id, file_id, chat_id, message_id, file_name, file_size),
@@ -249,19 +258,58 @@ async def telegram_webhook(
     if not claimed:
         return {"ok": True, "duplicate": True}
 
+    return {"ok": True, "status": "queued", "file_name": file_name}
+
+
+@router.post("/process-next")
+def process_next_telegram_import(
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
+    """Claim and process one durable queued import; safe to call from the poller."""
+    expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if not expected or not token:
+        raise HTTPException(status_code=503, detail="Telegram integration is not configured")
+    if not x_telegram_bot_api_secret_token or not hmac.compare_digest(
+        x_telegram_bot_api_secret_token, expected
+    ):
+        raise HTTPException(status_code=401, detail="Invalid Telegram worker secret")
+
+    with connection() as conn:
+        job = conn.execute(
+            """WITH candidate AS (
+                   SELECT id FROM telegram_imports
+                   WHERE status='queued'
+                      OR (status='processing'
+                          AND processing_started_at < now() - interval '30 minutes')
+                   ORDER BY created_at, id
+                   FOR UPDATE SKIP LOCKED
+                   LIMIT 1
+               )
+               UPDATE telegram_imports AS job
+               SET status='processing',
+                   attempt_count=job.attempt_count+1,
+                   processing_started_at=now(),
+                   updated_at=now(),
+                   error=NULL
+               FROM candidate
+               WHERE job.id=candidate.id
+               RETURNING job.file_unique_id,job.file_id,job.chat_id,
+                         job.message_id,job.file_name,job.file_size""",
+        ).fetchone()
+    if not job:
+        return {"ok": True, "status": "idle"}
+
     try:
-        binary = _download_epub(token, str(file_id), file_size)
+        binary = _download_epub(token, job["file_id"], job["file_size"])
         metadata = parse_epub(binary)
         result = _store_import(
-            metadata, str(file_unique_id), int(chat_id),
-            int(message.get("message_id", 0)), file_name,
-            file_size if isinstance(file_size, int) else None,
+            metadata, job["file_unique_id"], int(job["chat_id"]),
+            int(job["message_id"]), job["file_name"], job["file_size"],
         )
         return {"ok": True, "status": "imported", **result}
     except Exception as exc:
-        _mark_failed(str(file_unique_id), str(exc))
-        # Returning 200 prevents repeated webhook retries. Failed files can be
-        # reposted to the channel to trigger a fresh attempt.
+        _mark_failed(job["file_unique_id"], str(exc))
         return JSONResponse(
             {"ok": True, "status": "failed", "error": str(exc)[:300]},
             status_code=200,
