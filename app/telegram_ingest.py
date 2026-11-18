@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import os
 from typing import Any
@@ -36,9 +37,12 @@ def initialize_telegram_schema() -> None:
                 status TEXT NOT NULL DEFAULT 'processing'
                     CHECK (status IN ('processing','imported','failed')),
                 error TEXT,
+                audit JSONB NOT NULL DEFAULT '{}'::jsonb,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
+            ALTER TABLE telegram_imports
+                ADD COLUMN IF NOT EXISTS audit JSONB NOT NULL DEFAULT '{}'::jsonb;
             CREATE INDEX IF NOT EXISTS telegram_imports_status_idx
                 ON telegram_imports(status);
         """)
@@ -172,15 +176,16 @@ def _store_import(metadata: dict[str, Any], file_unique_id: str,
         conn.execute(
             """UPDATE telegram_imports
                SET book_id=%s, edition_id=%s, status='imported',
-                   error=NULL, updated_at=now()
+                   audit=%s::jsonb, error=NULL, updated_at=now()
                WHERE file_unique_id=%s""",
-            (book["id"], edition["id"], file_unique_id),
+            (book["id"], edition["id"], json.dumps(metadata.get("audit", {}), ensure_ascii=False), file_unique_id),
         )
     return {
         "book_id": book["id"],
         "title": book["title"],
         "edition_id": edition["id"],
         "indexed_passages": passage_count,
+        "audit": metadata.get("audit", {}),
     }
 
 
