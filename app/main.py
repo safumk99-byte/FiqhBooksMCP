@@ -12,6 +12,7 @@ from app.db import open_pool, close_pool, initialize_schema, connection
 from app.search import expand_search_query, build_fallback_search
 from app.segments import parse_turath_page
 from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema
+from app.admin_dashboard import attach_admin_dashboard
 
 mcp = FastMCP(
     "FiqhBooksMCP",
@@ -556,3 +557,4 @@ def health():
 
 # Optional Telegram EPUB ingestion routes; disabled until Telegram env vars are set.
 attach_telegram_routes(app)
+attach_admin_dashboard(app)
