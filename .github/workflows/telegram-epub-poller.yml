@@ -40,8 +40,6 @@ jobs:
           python - <<'PY'
           import json
           import os
-          import sys
-          import time
           import urllib.error
           import urllib.parse
           import urllib.request
@@ -66,7 +64,7 @@ jobs:
                   return json.loads(raw) if raw else {}
 
           base = f"https://api.telegram.org/bot{token}"
-          # Switch the bot from webhook delivery to getUpdates without discarding queued posts.
+          # Polling mode: preserve queued Telegram updates when disabling webhook delivery.
           request_json(base + "/deleteWebhook", method="POST",
                        headers={"Content-Type": "application/json"},
                        payload={"drop_pending_updates": False})
@@ -96,22 +94,23 @@ jobs:
                           "X-Telegram-Bot-Api-Secret-Token": secret,
                       },
                   )
-                  # A sleeping Render instance may need time to wake. On failure,
-                  # stop without advancing the cursor so Telegram can be retried.
+                  # Do not advance the cursor if durable ingestion fails; Telegram can retry it.
                   with urllib.request.urlopen(req, timeout=240) as response:
                       payload = json.loads(response.read() or b"{}")
                       if response.status < 200 or response.status >= 300:
                           raise RuntimeError(f"Render ingest returned HTTP {response.status}")
                       print(f"Forwarded {filename}: {payload.get('status', payload.get('ignored', 'accepted'))}")
+              else:
+                  print(f"Skipped non-EPUB channel update {update_id}")
               new_offset = max(new_offset, update_id + 1)
 
-          if new_offset != offset:
-              with open(offset_path, "w", encoding="utf-8") as state_file:
-                  state_file.write(str(new_offset))
-          print(f"Telegram poll checkpoint: {new_offset}")
+          # Always create the state file so actions/cache can save and restore offset=0 too.
+          # Previously, no-update runs left this file absent and cache save was skipped.
+          with open(offset_path, "w", encoding="utf-8") as state_file:
+              state_file.write(str(new_offset))
+          print(f"Telegram poll checkpoint saved: {new_offset}")
 
-          # Drain a small batch on every poller run instead of processing only
-          # one EPUB every five minutes. Stop as soon as the durable queue is empty.
+          # Drain up to four queued EPUB jobs on every poller run.
           processed = 0
           for batch_index in range(4):
               worker_req = urllib.request.Request(
