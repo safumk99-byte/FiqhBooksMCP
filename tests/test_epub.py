@@ -38,7 +38,7 @@ def make_epub(*, missing: bool = False, empty: bool = False,
         archive.writestr("OEBPS/chapter1.xhtml", body)
         if not missing:
             if corrupt:
-                archive.writestr("OEBPS/chapter2.xhtml", b'\xff\xfe')
+                archive.writestr("OEBPS/chapter2.xhtml", b'\xff\xff')
             elif empty:
                 archive.writestr("OEBPS/chapter2.xhtml", '<html><body><script>x</script></body></html>')
             else:
