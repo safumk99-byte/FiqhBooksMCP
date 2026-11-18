@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 
 MAX_ARCHIVE_ENTRIES = 20000
 MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
-MAX_EXTRACTED_TEXT = 30 * 1024 * 1024
+MAX_EXTRACTED_TEXT = 60 * 1024 * 1024
 CHUNK_CHARS = 3200
 
 _BLOCK_TAGS = {
@@ -185,7 +185,7 @@ def parse_epub(data: bytes) -> dict:
                     continue
                 total_text += len(text)
                 if total_text > MAX_EXTRACTED_TEXT:
-                    raise ValueError("Extracted EPUB text exceeds the 30 MB safety limit")
+                    raise ValueError("Extracted EPUB text exceeds the 60 MB safety limit")
                 chapter_name = heading or f"Section {index}"
                 for chunk_no, chunk in enumerate(_split_text(text), start=1):
                     locator = f"{chapter_name} — part {chunk_no}"
