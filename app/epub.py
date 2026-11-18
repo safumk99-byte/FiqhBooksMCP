@@ -1,16 +1,11 @@
-"""Small, defensive EPUB text extractor for Telegram-imported books.
-
-Original EPUB binaries remain on Telegram. This module extracts ordered spine
-content and emits chapter/section chunks for the existing PostgreSQL passage
-search index. EPUB files do not reliably encode printed page numbers.
-"""
+"""Defensive EPUB text extraction with explicit spine-completeness validation."""
 from __future__ import annotations
 
 from html.parser import HTMLParser
 from io import BytesIO
 import posixpath
 import re
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 from zipfile import BadZipFile, ZipFile
 import xml.etree.ElementTree as ET
 
@@ -25,6 +20,7 @@ _BLOCK_TAGS = {
     "p", "pre", "section", "table", "td", "th", "tr", "ul",
 }
 _SKIP_TAGS = {"script", "style", "svg", "head", "noscript"}
+_TEXT_MEDIA_TYPES = {"application/xhtml+xml", "text/html"}
 
 
 class _TextExtractor(HTMLParser):
@@ -45,7 +41,7 @@ class _TextExtractor(HTMLParser):
         if tag in {"h1", "h2", "h3", "title"}:
             self.heading_depth += 1
         if tag in _BLOCK_TAGS:
-            self.parts.append("\n")
+            self.parts.append("\\n")
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -57,7 +53,7 @@ class _TextExtractor(HTMLParser):
         if tag in {"h1", "h2", "h3", "title"} and self.heading_depth:
             self.heading_depth -= 1
         if tag in _BLOCK_TAGS:
-            self.parts.append("\n")
+            self.parts.append("\\n")
 
     def handle_data(self, data: str) -> None:
         if self.skip_depth:
@@ -70,12 +66,10 @@ class _TextExtractor(HTMLParser):
             self.heading_parts.append(value)
 
     def result(self) -> tuple[str, str]:
-        text = "".join(self.parts)
-        lines = [re.sub(r"\s+", " ", line).strip()
-                 for line in text.splitlines()]
-        paragraphs = [line for line in lines if line]
-        heading = re.sub(r"\s+", " ", " ".join(self.heading_parts)).strip()
-        return heading, "\n".join(paragraphs)
+        raw = "".join(self.parts)
+        lines = [re.sub(r"\\s+", " ", line).strip() for line in raw.splitlines()]
+        heading = re.sub(r"\\s+", " ", " ".join(self.heading_parts)).strip()
+        return heading, "\\n".join(line for line in lines if line)
 
 
 def _local_name(tag: str) -> str:
@@ -85,7 +79,7 @@ def _local_name(tag: str) -> str:
 def _read_xml(archive: ZipFile, name: str) -> ET.Element:
     try:
         return ET.fromstring(archive.read(name))
-    except (KeyError, ET.ParseError) as exc:
+    except (KeyError, ET.ParseError, UnicodeDecodeError) as exc:
         raise ValueError(f"Invalid EPUB package metadata: {name}") from exc
 
 
@@ -103,7 +97,7 @@ def _split_text(text: str, max_chars: int = CHUNK_CHARS) -> list[str]:
                 cut = max_chars
             chunks.append(paragraph[:cut].strip())
             paragraph = paragraph[cut:].strip()
-        candidate = f"{current}\n{paragraph}" if current else paragraph
+        candidate = f"{current}\\n{paragraph}" if current else paragraph
         if len(candidate) > max_chars and current:
             chunks.append(current)
             current = paragraph
@@ -114,8 +108,24 @@ def _split_text(text: str, max_chars: int = CHUNK_CHARS) -> list[str]:
     return chunks
 
 
+def _archive_path(rootfile: str, href: str) -> str:
+    parsed = urlsplit(href)
+    if parsed.scheme or parsed.netloc:
+        raise ValueError("Spine resource uses an external URL")
+    decoded = unquote(parsed.path)
+    path = posixpath.normpath(posixpath.join(posixpath.dirname(rootfile), decoded))
+    if path == ".." or path.startswith("../") or path.startswith("/"):
+        raise ValueError("Spine resource resolves outside the EPUB package")
+    return path
+
+
 def parse_epub(data: bytes) -> dict:
-    """Return OPF metadata and ordered (locator, text) chapter chunks."""
+    """Return metadata, ordered text chunks, and a strict extraction audit.
+
+    Every linear spine item must resolve to a supported XHTML/HTML manifest
+    resource and yield readable text. Non-linear spine items are counted but
+    intentionally excluded from the reading order.
+    """
     if not data or not data.startswith(b"PK"):
         raise ValueError("The uploaded file is not a valid EPUB/ZIP file")
 
@@ -124,76 +134,111 @@ def parse_epub(data: bytes) -> dict:
             entries = archive.infolist()
             if len(entries) > MAX_ARCHIVE_ENTRIES:
                 raise ValueError("EPUB contains too many archive entries")
-            uncompressed_size = sum(item.file_size for item in entries)
-            if uncompressed_size > MAX_UNCOMPRESSED_BYTES:
+            if sum(item.file_size for item in entries) > MAX_UNCOMPRESSED_BYTES:
                 raise ValueError("EPUB expands beyond the 100 MB safety limit")
+            names = set(archive.namelist())
 
             container = _read_xml(archive, "META-INF/container.xml")
-            rootfile = next(
-                (node.attrib.get("full-path") for node in container.iter()
-                 if _local_name(node.tag) == "rootfile"),
-                None,
-            )
-            if not rootfile or rootfile not in archive.namelist():
+            rootfile = next((node.attrib.get("full-path") for node in container.iter()
+                             if _local_name(node.tag) == "rootfile"), None)
+            if not rootfile:
+                raise ValueError("EPUB package document was not declared")
+            rootfile = posixpath.normpath(unquote(rootfile))
+            if rootfile not in names:
                 raise ValueError("EPUB package document was not found")
 
             package = _read_xml(archive, rootfile)
             metadata: dict[str, str] = {}
+            manifest: dict[str, dict[str, str]] = {}
+            spine: list[tuple[str, bool]] = []
             for node in package.iter():
                 key = _local_name(node.tag)
                 if key in {"title", "creator", "publisher", "date", "language"}:
                     value = " ".join("".join(node.itertext()).split())
                     if value and key not in metadata:
                         metadata[key] = value
-
-            manifest: dict[str, str] = {}
-            spine_ids: list[str] = []
-            for node in package.iter():
-                key = _local_name(node.tag)
-                if key == "item":
+                elif key == "item":
                     item_id = node.attrib.get("id")
                     href = node.attrib.get("href")
-                    media = node.attrib.get("media-type", "")
-                    properties = node.attrib.get("properties", "")
-                    if item_id and href and media in {
-                        "application/xhtml+xml", "text/html"
-                    } and "nav" not in properties.split():
-                        manifest[item_id] = posixpath.normpath(
-                            posixpath.join(posixpath.dirname(rootfile), unquote(href.split("#", 1)[0]))
-                        )
+                    if item_id and href:
+                        if item_id in manifest:
+                            raise ValueError(f"Duplicate EPUB manifest id: {item_id}")
+                        manifest[item_id] = {
+                            "href": href,
+                            "media_type": node.attrib.get("media-type", "").lower(),
+                            "properties": node.attrib.get("properties", ""),
+                        }
                 elif key == "itemref":
                     item_id = node.attrib.get("idref")
                     if item_id:
-                        spine_ids.append(item_id)
+                        spine.append((item_id, node.attrib.get("linear", "yes").lower() != "no"))
+
+            if not spine:
+                raise ValueError("EPUB reading order (spine) is empty")
 
             chapters: list[tuple[str, str]] = []
+            failures: list[dict[str, str]] = []
+            linear_expected = 0
+            non_linear_skipped = 0
             total_text = 0
-            for index, item_id in enumerate(spine_ids, start=1):
-                path = manifest.get(item_id)
-                if not path or path not in archive.namelist():
+            extracted_sections = 0
+
+            for index, (item_id, is_linear) in enumerate(spine, start=1):
+                if not is_linear:
+                    non_linear_skipped += 1
                     continue
-                extractor = _TextExtractor()
+                linear_expected += 1
+                item = manifest.get(item_id)
+                if item is None:
+                    failures.append({"idref": item_id, "reason": "missing_manifest_item"})
+                    continue
+                if item["media_type"] not in _TEXT_MEDIA_TYPES:
+                    failures.append({"idref": item_id, "reason": "unsupported_spine_media_type:" + item["media_type"]})
+                    continue
                 try:
-                    extractor.feed(archive.read(path).decode("utf-8-sig", errors="replace"))
+                    path = _archive_path(rootfile, item["href"])
+                    if path not in names:
+                        raise ValueError("archive_resource_missing")
+                    raw = archive.read(path)
+                    decoded = raw.decode("utf-8-sig", errors="strict")
+                    extractor = _TextExtractor()
+                    extractor.feed(decoded)
                     extractor.close()
-                except (KeyError, Exception) as exc:
-                    if isinstance(exc, ValueError):
-                        raise
-                    continue
-                heading, text = extractor.result()
-                if not text:
+                    heading, text = extractor.result()
+                    if not text:
+                        raise ValueError("no_readable_text")
+                except (KeyError, UnicodeDecodeError, ValueError) as exc:
+                    reason = str(exc) or type(exc).__name__
+                    failures.append({"idref": item_id, "reason": reason[:240]})
                     continue
                 total_text += len(text)
                 if total_text > MAX_EXTRACTED_TEXT:
                     raise ValueError("Extracted EPUB text exceeds the 60 MB safety limit")
-                chapter_name = heading or f"Section {index}"
+                extracted_sections += 1
+                section_name = heading or f"Section {index}"
                 for chunk_no, chunk in enumerate(_split_text(text), start=1):
-                    locator = f"{chapter_name} — part {chunk_no}"
-                    chapters.append((locator, chunk))
+                    chapters.append((f"{section_name} — part {chunk_no}", chunk))
 
+            if failures:
+                details = "; ".join(f"{f['idref']}:{f['reason']}" for f in failures[:8])
+                suffix = f" (+{len(failures) - 8} more)" if len(failures) > 8 else ""
+                raise ValueError(
+                    f"EPUB completeness validation failed: {len(failures)} of "
+                    f"{linear_expected} linear spine items could not be extracted: {details}{suffix}"
+                )
             if not chapters:
                 raise ValueError("No readable chapter text was found in this EPUB")
 
+            audit = {
+                "validation": "passed",
+                "spine_items_total": len(spine),
+                "linear_items_expected": linear_expected,
+                "linear_items_extracted": extracted_sections,
+                "non_linear_items_skipped": non_linear_skipped,
+                "extracted_characters": total_text,
+                "passage_chunks": len(chapters),
+                "failed_items": [],
+            }
             return {
                 "title": metadata.get("title") or "Untitled EPUB",
                 "author": metadata.get("creator") or "",
@@ -201,6 +246,7 @@ def parse_epub(data: bytes) -> dict:
                 "edition_year": metadata.get("date") or "",
                 "language": metadata.get("language") or "ar",
                 "chapters": chapters,
+                "audit": audit,
             }
     except BadZipFile as exc:
         raise ValueError("The uploaded file is a damaged EPUB archive") from exc
