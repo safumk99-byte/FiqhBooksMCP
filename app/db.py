@@ -104,6 +104,15 @@ CREATE INDEX IF NOT EXISTS turath_segments_search_ar_idx
 CREATE INDEX IF NOT EXISTS turath_segments_type_idx
     ON turath_segments(segment_type);
 
+CREATE TABLE IF NOT EXISTS turath_index_failures (
+    turath_book_id BIGINT NOT NULL,
+    sequential_index INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 1,
+    last_error TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (turath_book_id, sequential_index)
+);
+
 CREATE TABLE IF NOT EXISTS citations (
     id BIGSERIAL PRIMARY KEY,
     passage_id BIGINT REFERENCES passages(id) ON DELETE SET NULL,
