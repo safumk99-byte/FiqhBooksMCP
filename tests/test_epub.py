@@ -3,7 +3,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from app.epub import CHUNK_CHARS, parse_epub
+from app.epub import CHUNK_CHARS, _decode_document, parse_epub
 
 
 def make_epub(*, missing: bool = False, empty: bool = False,
@@ -89,3 +89,19 @@ def test_long_text_is_split_within_chunk_limit():
     result = parse_epub(make_epub(long_text=True))
     assert len(result["chapters"]) >= 2
     assert all(len(content) <= CHUNK_CHARS for _, content in result["chapters"])
+
+
+def test_decode_declared_legacy_xml_encoding():
+    raw = '<?xml version="1.0" encoding="iso-8859-1"?><html><body>café</body></html>'.encode("iso-8859-1")
+    assert "café" in _decode_document(raw)
+
+
+def test_decode_utf16_bom_without_declaration():
+    raw = '<html><body>كتاب الصلاة</body></html>'.encode("utf-16")
+    assert "كتاب الصلاة" in _decode_document(raw)
+
+
+def test_rejects_unknown_declared_encoding():
+    raw = b'<?xml version="1.0" encoding="made-up-codec"?><html/>'
+    with pytest.raises(ValueError, match="unsupported_or_invalid_encoding"):
+        _decode_document(raw)
