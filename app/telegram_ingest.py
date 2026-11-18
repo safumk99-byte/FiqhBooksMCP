@@ -319,6 +319,72 @@ def process_next_telegram_import(
         )
 
 
+def _require_worker_secret(supplied: str | None) -> None:
+    expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if not expected or not os.getenv("TELEGRAM_BOT_TOKEN", ""):
+        raise HTTPException(status_code=503, detail="Telegram integration is not configured")
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Invalid Telegram worker secret")
+
+
+@router.get("/status")
+def telegram_import_status(
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+    limit: int = 50,
+):
+    """Return queue totals and recent EPUB imports for an authenticated dashboard."""
+    _require_worker_secret(x_telegram_bot_api_secret_token)
+    limit = max(1, min(int(limit), 100))
+    with connection() as conn:
+        totals = conn.execute(
+            """SELECT
+                 count(*)::int AS total,
+                 count(*) FILTER (WHERE status='queued')::int AS queued,
+                 count(*) FILTER (WHERE status='processing')::int AS processing,
+                 count(*) FILTER (WHERE status='imported')::int AS imported,
+                 count(*) FILTER (WHERE status='failed')::int AS failed,
+                 coalesce(sum(attempt_count),0)::int AS total_attempts
+               FROM telegram_imports"""
+        ).fetchone()
+        recent = conn.execute(
+            """SELECT id,file_name,file_size,status,attempt_count,error,
+                      book_id,edition_id,audit,created_at,updated_at
+               FROM telegram_imports
+               ORDER BY created_at DESC,id DESC
+               LIMIT %s""",
+            (limit,),
+        ).fetchall()
+    return {
+        "ok": True,
+        "summary": dict(totals),
+        "recent_imports": [dict(row) for row in recent],
+        "limit": limit,
+    }
+
+
+@router.post("/retry/{import_id}")
+def retry_failed_telegram_import(
+    import_id: int,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
+    """Requeue one failed EPUB; never resets a running or completed import."""
+    _require_worker_secret(x_telegram_bot_api_secret_token)
+    with connection() as conn:
+        row = conn.execute(
+            """UPDATE telegram_imports
+               SET status='queued',error=NULL,processing_started_at=NULL,updated_at=now()
+               WHERE id=%s AND status='failed' AND file_id IS NOT NULL
+               RETURNING id,file_name,status,attempt_count""",
+            (import_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(
+            status_code=409,
+            detail="Import not found, not failed, or missing its Telegram file reference",
+        )
+    return {"ok": True, "message": "Import queued for retry", "import": dict(row)}
+
+
 @router.post("/register")
 async def register_telegram_webhook(request: Request):
     """Register Telegram webhook; protected with the existing MCP bearer token."""
