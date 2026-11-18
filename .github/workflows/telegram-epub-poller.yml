@@ -110,18 +110,29 @@ jobs:
                   state_file.write(str(new_offset))
           print(f"Telegram poll checkpoint: {new_offset}")
 
-          # Process one durable queued EPUB per scheduled run. If Render is
-          # waking from sleep, the request timeout allows the instance to start.
-          worker_req = urllib.request.Request(
-              os.environ["RENDER_PROCESS_URL"],
-              data=b"{}",
-              method="POST",
-              headers={
-                  "Content-Type": "application/json",
-                  "X-Telegram-Bot-Api-Secret-Token": secret,
-              },
-          )
-          with urllib.request.urlopen(worker_req, timeout=240) as response:
-              worker_result = json.loads(response.read() or b"{}")
-              print("EPUB worker:", worker_result.get("status", "unknown"))
+          # Drain a small batch on every poller run instead of processing only
+          # one EPUB every five minutes. Stop as soon as the durable queue is empty.
+          processed = 0
+          for batch_index in range(4):
+              worker_req = urllib.request.Request(
+                  os.environ["RENDER_PROCESS_URL"],
+                  data=b"{}",
+                  method="POST",
+                  headers={
+                      "Content-Type": "application/json",
+                      "X-Telegram-Bot-Api-Secret-Token": secret,
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(worker_req, timeout=180) as response:
+                      worker_result = json.loads(response.read() or b"{}")
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", "replace")[:300]
+                  raise RuntimeError(f"Render EPUB worker returned HTTP {exc.code}: {detail}") from exc
+              status = worker_result.get("status", "unknown")
+              print(f"EPUB batch item {batch_index + 1}: {status}")
+              if status == "idle":
+                  break
+              processed += 1
+          print(f"EPUB batch finished; worker calls with jobs: {processed}/4")
           PY
