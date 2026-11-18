@@ -11,6 +11,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
 from app.search import expand_search_query, build_fallback_search
 from app.segments import parse_turath_page
+from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema
 
 mcp = FastMCP(
     "FiqhBooksMCP",
@@ -502,6 +503,7 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     open_pool()
     initialize_schema()
+    initialize_telegram_schema()
     try:
         async with mcp.session_manager.run():
             yield
@@ -520,3 +522,7 @@ def health():
         return {"status": "healthy", "database": "connected", "service": "FiqhBooksMCP"}
     except Exception:
         return JSONResponse({"status": "degraded", "database": "unavailable"}, status_code=503)
+
+
+# Optional Telegram EPUB ingestion routes; disabled until Telegram env vars are set.
+attach_telegram_routes(app)
