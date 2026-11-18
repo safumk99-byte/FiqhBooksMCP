@@ -636,7 +636,9 @@ def search_all_books(query: str, results_per_book: int = 2) -> dict:
                 )})
                 remote_results.extend(outcome["results"])
 
-    remote_titles = {book["title"] for book in books}
+    remotely_matched_titles = {
+        item["title"] for item in per_book_status if item["status"] == "matched"
+    }
     local_hits = search_passages(query, limit=100)
     local_results = [{
         "source": "local_passage_index",
@@ -645,7 +647,7 @@ def search_all_books(query: str, results_per_book: int = 2) -> dict:
         "page_number": hit.get("page_number"),
         "locator": hit.get("locator"),
         "text": (hit.get("content") or "")[:1800],
-    } for hit in local_hits if hit.get("book_title") not in remote_titles]
+    } for hit in local_hits if hit.get("book_title") not in remotely_matched_titles]
 
     local_searchable = [
         {"library_book_id": int(row["id"]), "title": row["title"],
