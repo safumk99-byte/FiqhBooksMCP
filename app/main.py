@@ -198,8 +198,7 @@ def turath_get_page(book_id: int, page_number: int) -> dict:
     """Get one parsed Turath book page with its text and source attribution."""
     return _turath_get(f"{TURATH_API}/page", {"book_id": book_id, "pg": page_number, "ver": "3"})
 
-@mcp.tool()
-def turath_index_page(book_id: int, sequential_index: int) -> dict:
+def _index_turath_page(book_id: int, sequential_index: int) -> dict:
     """Fetch one Turath page and idempotently index its explicitly marked source segments."""
     if book_id <= 0 or sequential_index <= 0:
         raise ValueError("book_id and sequential_index must be positive integers")
@@ -282,6 +281,149 @@ def turath_index_page(book_id: int, sequential_index: int) -> dict:
         "segments_indexed": len(segments),
         "segment_types": [segment["segment_type"] for segment in segments],
         "idempotent": True,
+    }
+
+
+@mcp.tool()
+def turath_index_page(book_id: int, sequential_index: int) -> dict:
+    """Fetch and idempotently index one explicitly attributed Turath page."""
+    return _index_turath_page(book_id, sequential_index)
+
+
+def _turath_sequential_indexes(book_info: dict) -> list[int]:
+    """Read only real page-map entries; never treat null padding as pages."""
+    indexes = book_info.get("indexes") or {}
+    print_map = indexes.get("print_pg_to_pg")
+    values: set[int] = set()
+    if isinstance(print_map, dict):
+        for value in print_map.values():
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                values.add(number)
+    if not values:
+        page_map = indexes.get("page_map") or []
+        for position, entry in enumerate(page_map):
+            if entry:
+                # Turath's page endpoint uses 1-based pg values; page_map
+                # has two null padding positions before its first real page.
+                values.add(position + 1)
+    return sorted(values)
+
+
+@mcp.tool()
+def turath_index_batch(book_id: int, batch_size: int = 5) -> dict:
+    """Index the next missing Turath pages; safe to rerun after interruption.
+
+    The book's official page map defines the valid page range. Completed pages
+    are skipped, each page commits independently, and failures are checkpointed
+    for automatic retry on a later call.
+    """
+    if book_id <= 0:
+        raise ValueError("book_id must be a positive integer")
+    batch_size = max(1, min(int(batch_size), 5))
+
+    book_info = turath_get_book_info(book_id)
+    sequential_indexes = _turath_sequential_indexes(book_info)
+    if not sequential_indexes:
+        raise ValueError("Turath returned no valid page-map entries; refusing to start indexing")
+
+    with connection() as conn:
+        indexed_rows = conn.execute(
+            "SELECT sequential_index FROM turath_source_pages WHERE turath_book_id=%s",
+            (book_id,),
+        ).fetchall()
+        indexed = {int(row["sequential_index"]) for row in indexed_rows}
+        pending = [number for number in sequential_indexes if number not in indexed]
+
+    selected = pending[:batch_size]
+    page_results = []
+    for sequential_index in selected:
+        try:
+            result = _index_turath_page(book_id, sequential_index)
+        except Exception as exc:
+            error_text = str(exc)[:1000]
+            with connection() as conn:
+                conn.execute(
+                    """INSERT INTO turath_index_failures
+                       (turath_book_id,sequential_index,attempts,last_error,updated_at)
+                       VALUES (%s,%s,1,%s,now())
+                       ON CONFLICT (turath_book_id,sequential_index) DO UPDATE SET
+                         attempts=turath_index_failures.attempts+1,
+                         last_error=EXCLUDED.last_error,
+                         updated_at=now()""",
+                    (book_id, sequential_index, error_text),
+                )
+            page_results.append({
+                "sequential_index": sequential_index,
+                "status": "failed",
+                "error": error_text,
+            })
+        else:
+            with connection() as conn:
+                conn.execute(
+                    "DELETE FROM turath_index_failures WHERE turath_book_id=%s AND sequential_index=%s",
+                    (book_id, sequential_index),
+                )
+            page_results.append({
+                "sequential_index": sequential_index,
+                "status": "indexed",
+                "turath_page_id": result["turath_page_id"],
+                "volume": result["volume"],
+                "printed_page": result["printed_page"],
+                "segments_indexed": result["segments_indexed"],
+                "segment_types": result["segment_types"],
+            })
+
+    with connection() as conn:
+        counts = conn.execute(
+            """SELECT
+                 count(*)::int AS indexed_pages,
+                 coalesce(sum(segment_count),0)::int AS indexed_segments
+               FROM (
+                 SELECT p.id, count(s.id)::int AS segment_count
+                 FROM turath_source_pages p
+                 LEFT JOIN turath_segments s ON s.source_page_id=p.id
+                 WHERE p.turath_book_id=%s
+                 GROUP BY p.id
+               ) indexed_data""",
+            (book_id,),
+        ).fetchone()
+        failures = conn.execute(
+            """SELECT sequential_index,attempts,last_error
+               FROM turath_index_failures
+               WHERE turath_book_id=%s
+               ORDER BY sequential_index""",
+            (book_id,),
+        ).fetchall()
+
+    indexed_pages = int(counts["indexed_pages"])
+    total_pages = len(sequential_indexes)
+    remaining_pages = max(0, total_pages - indexed_pages)
+    next_missing = next(
+        (number for number in sequential_indexes
+         if number not in indexed and number not in {
+             item["sequential_index"] for item in page_results
+             if item["status"] == "indexed"
+         }),
+        None,
+    )
+    return {
+        "status": "complete" if remaining_pages == 0 else "partial",
+        "turath_book_id": book_id,
+        "book_title": (book_info.get("meta") or {}).get("name"),
+        "valid_page_map_entries": total_pages,
+        "indexed_pages": indexed_pages,
+        "remaining_pages": remaining_pages,
+        "indexed_segments": int(counts["indexed_segments"]),
+        "failed_page_count": len(failures),
+        "failed_pages": [dict(row) for row in failures[:25]],
+        "next_missing_sequential_index": next_missing,
+        "batch_size": batch_size,
+        "processed_this_batch": page_results,
+        "resume_hint": "Call turath_index_batch again with the same book_id; completed pages are skipped and failed pages are retried.",
     }
 
 
