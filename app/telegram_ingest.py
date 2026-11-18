@@ -1,0 +1,249 @@
+"""Telegram channel webhook and EPUB-to-search-index ingestion."""
+from __future__ import annotations
+
+import hmac
+import os
+from typing import Any
+
+import httpx
+from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
+
+from app.db import connection
+from app.epub import parse_epub
+
+router = APIRouter()
+TELEGRAM_API = "https://api.telegram.org"
+MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+def initialize_telegram_schema() -> None:
+    with connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_imports (
+                id BIGSERIAL PRIMARY KEY,
+                file_unique_id TEXT NOT NULL UNIQUE,
+                chat_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_size BIGINT,
+                book_id BIGINT REFERENCES books(id) ON DELETE SET NULL,
+                edition_id BIGINT REFERENCES editions(id) ON DELETE SET NULL,
+                status TEXT NOT NULL DEFAULT 'processing'
+                    CHECK (status IN ('processing','imported','failed')),
+                error TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS telegram_imports_status_idx
+                ON telegram_imports(status);
+        """)
+
+
+def _telegram_request(method: str, token: str, payload: dict | None = None) -> dict:
+    try:
+        response = httpx.post(
+            f"{TELEGRAM_API}/bot{token}/{method}",
+            json=payload or {},
+            timeout=httpx.Timeout(45.0, connect=10.0),
+        )
+        response.raise_for_status()
+        body = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ValueError(f"Telegram {method} request failed") from exc
+    if not body.get("ok"):
+        raise ValueError(f"Telegram {method} request was rejected")
+    return body.get("result") or {}
+
+
+def _claim_file(file_unique_id: str, chat_id: int, message_id: int,
+                file_name: str, file_size: int | None) -> bool:
+    with connection() as conn:
+        row = conn.execute(
+            """INSERT INTO telegram_imports
+               (file_unique_id,chat_id,message_id,file_name,file_size,status)
+               VALUES (%s,%s,%s,%s,%s,'processing')
+               ON CONFLICT (file_unique_id) DO UPDATE SET
+                   chat_id=EXCLUDED.chat_id,
+                   message_id=EXCLUDED.message_id,
+                   file_name=EXCLUDED.file_name,
+                   file_size=EXCLUDED.file_size,
+                   status='processing', error=NULL, updated_at=now()
+               WHERE telegram_imports.status='failed'
+               RETURNING id""",
+            (file_unique_id, chat_id, message_id, file_name, file_size),
+        ).fetchone()
+    return row is not None
+
+
+def _download_epub(token: str, file_id: str, file_size: int | None) -> bytes:
+    if file_size is not None and file_size > MAX_DOWNLOAD_BYTES:
+        raise ValueError("Telegram Bot API download limit is 20 MB; this EPUB is too large")
+    result = _telegram_request("getFile", token, {"file_id": file_id})
+    file_path = result.get("file_path")
+    if not file_path:
+        raise ValueError("Telegram did not return a downloadable file path")
+    url = f"{TELEGRAM_API}/file/bot{token}/{file_path}"
+    try:
+        with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0),
+                          follow_redirects=True) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            if len(response.content) > MAX_DOWNLOAD_BYTES:
+                raise ValueError("Downloaded file exceeds the 20 MB Telegram limit")
+            return response.content
+    except httpx.HTTPError as exc:
+        raise ValueError("Could not download the EPUB from Telegram") from exc
+
+
+def _store_import(metadata: dict[str, Any], file_unique_id: str,
+                  chat_id: int, message_id: int, file_name: str,
+                  file_size: int | None) -> dict:
+    chapters = metadata["chapters"]
+    with connection() as conn:
+        book = conn.execute(
+            """INSERT INTO books (title,author,language,description)
+               VALUES (%s,%s,%s,%s)
+               RETURNING id,title""",
+            (metadata["title"], metadata["author"], metadata["language"],
+             "Imported from the private Telegram FiqhBooks channel; "
+             "original EPUB remains in Telegram."),
+        ).fetchone()
+        edition = conn.execute(
+            """INSERT INTO editions
+               (book_id,title,publisher,edition_year,source_file_key)
+               VALUES (%s,%s,%s,%s,%s)
+               RETURNING id""",
+            (book["id"], file_name, metadata["publisher"],
+             metadata["edition_year"], f"telegram:file_unique_id:{file_unique_id}"),
+        ).fetchone()
+
+        passage_count = 0
+        for locator, content in chapters:
+            conn.execute(
+                """INSERT INTO passages (edition_id,locator,content)
+                   VALUES (%s,%s,%s)""",
+                (edition["id"], locator, content),
+            )
+            passage_count += 1
+
+        conn.execute(
+            """UPDATE telegram_imports
+               SET book_id=%s, edition_id=%s, status='imported',
+                   error=NULL, updated_at=now()
+               WHERE file_unique_id=%s""",
+            (book["id"], edition["id"], file_unique_id),
+        )
+    return {
+        "book_id": book["id"],
+        "title": book["title"],
+        "edition_id": edition["id"],
+        "indexed_passages": passage_count,
+    }
+
+
+def _mark_failed(file_unique_id: str, error: str) -> None:
+    with connection() as conn:
+        conn.execute(
+            """UPDATE telegram_imports
+               SET status='failed', error=%s, updated_at=now()
+               WHERE file_unique_id=%s""",
+            (error[:1000], file_unique_id),
+        )
+
+
+@router.post("/webhook")
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
+    expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    allowed_chat = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "").strip()
+    if not expected or not token:
+        raise HTTPException(status_code=503, detail="Telegram integration is not configured")
+    if not x_telegram_bot_api_secret_token or not hmac.compare_digest(
+        x_telegram_bot_api_secret_token, expected
+    ):
+        raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
+
+    update = await request.json()
+    message = update.get("channel_post")
+    if not isinstance(message, dict):
+        return {"ok": True, "ignored": "not_a_channel_post"}
+
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    if chat.get("type") != "channel" or not isinstance(chat_id, int):
+        return {"ok": True, "ignored": "not_a_channel"}
+    if allowed_chat and str(chat_id) != allowed_chat:
+        raise HTTPException(status_code=403, detail="This Telegram channel is not allowed")
+
+    document = message.get("document") or {}
+    file_id = document.get("file_id")
+    file_unique_id = document.get("file_unique_id")
+    file_name = document.get("file_name") or ""
+    file_size = document.get("file_size")
+    if not file_id or not file_unique_id:
+        return {"ok": True, "ignored": "no_document"}
+    if not file_name.lower().endswith(".epub"):
+        return {"ok": True, "ignored": "only_epub_files_are_supported"}
+    if file_size is not None and file_size > MAX_DOWNLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="EPUB exceeds Telegram's 20 MB Bot API download limit")
+
+    claimed = _claim_file(
+        str(file_unique_id), int(chat_id), int(message.get("message_id", 0)),
+        file_name, file_size if isinstance(file_size, int) else None,
+    )
+    if not claimed:
+        return {"ok": True, "duplicate": True}
+
+    try:
+        binary = _download_epub(token, str(file_id), file_size)
+        metadata = parse_epub(binary)
+        result = _store_import(
+            metadata, str(file_unique_id), int(chat_id),
+            int(message.get("message_id", 0)), file_name,
+            file_size if isinstance(file_size, int) else None,
+        )
+        return {"ok": True, "status": "imported", **result}
+    except Exception as exc:
+        _mark_failed(str(file_unique_id), str(exc))
+        # Returning 200 prevents repeated webhook retries. Failed files can be
+        # reposted to the channel to trigger a fresh attempt.
+        return JSONResponse(
+            {"ok": True, "status": "failed", "error": str(exc)[:300]},
+            status_code=200,
+        )
+
+
+@router.post("/register")
+async def register_telegram_webhook(request: Request):
+    """Register Telegram webhook; protected with the existing MCP bearer token."""
+    expected_mcp = os.getenv("MCP_BEARER_TOKEN", "")
+    supplied = request.headers.get("authorization", "")
+    if not expected_mcp or not hmac.compare_digest(supplied, f"Bearer {expected_mcp}"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip()
+    if not bot_token or not secret or not webhook_url:
+        raise HTTPException(status_code=503, detail="Set TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET and TELEGRAM_WEBHOOK_URL")
+    if not webhook_url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="TELEGRAM_WEBHOOK_URL must use HTTPS")
+    result = _telegram_request(
+        "setWebhook",
+        bot_token,
+        {
+            "url": webhook_url.rstrip("/") + "/telegram/webhook",
+            "secret_token": secret,
+            "allowed_updates": ["channel_post"],
+            "drop_pending_updates": False,
+        },
+    )
+    return {"ok": True, "webhook_registered": bool(result), "url": webhook_url.rstrip("/") + "/telegram/webhook"}
+
+
+def attach_telegram_routes(app) -> None:
+    app.include_router(router, prefix="/telegram", tags=["Telegram EPUB ingestion"])
