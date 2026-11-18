@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 from typing import Any
 
@@ -13,6 +14,9 @@ from app.db import connection
 from app.epub import parse_epub
 
 router = APIRouter()
+# httpx INFO logs include full request URLs; Telegram Bot API URLs contain the bot token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 TELEGRAM_API = "https://api.telegram.org"
 MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 
