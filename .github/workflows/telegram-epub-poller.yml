@@ -21,14 +21,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Checkout poller state
+        uses: actions/checkout@v4
+      - name: Restore Telegram update offset
+        uses: actions/cache@v4
+        with:
+          path: .telegram_offset
+          key: telegram-offset-${{ github.run_id }}
+          restore-keys: |
+            telegram-offset-
       - name: Poll Telegram and forward EPUB channel posts
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
           RENDER_INGEST_URL: https://fiqhbooksmcp-1.onrender.com/telegram/webhook
           RENDER_PROCESS_URL: https://fiqhbooksmcp-1.onrender.com/telegram/process-next
-          GH_TOKEN: ${{ github.token }}
-          GH_REPOSITORY: ${{ github.repository }}
         run: |
           python - <<'PY'
           import json
@@ -44,9 +51,12 @@ jobs:
           if not token or not secret:
               raise SystemExit("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_WEBHOOK_SECRET repository secret")
 
-          repo = os.environ["GH_REPOSITORY"]
-          gh_token = os.environ["GH_TOKEN"]
-          api = f"https://api.github.com/repos/{repo}/actions/variables/TELEGRAM_LAST_UPDATE_ID"
+          offset_path = ".telegram_offset"
+          try:
+              with open(offset_path, "r", encoding="utf-8") as state_file:
+                  offset = int(state_file.read().strip() or "0")
+          except (FileNotFoundError, ValueError):
+              offset = 0
 
           def request_json(url, method="GET", headers=None, payload=None, timeout=60):
               data = None if payload is None else json.dumps(payload).encode()
@@ -111,14 +121,8 @@ jobs:
               new_offset = max(new_offset, update_id + 1)
 
           if new_offset != offset:
-              payload = {"name": "TELEGRAM_LAST_UPDATE_ID", "value": str(new_offset)}
-              try:
-                  request_json(api, method="PATCH", headers=gh_headers, payload=payload)
-              except urllib.error.HTTPError as exc:
-                  if exc.code != 404:
-                      raise
-                  request_json(f"https://api.github.com/repos/{repo}/actions/variables",
-                               method="POST", headers=gh_headers, payload=payload)
+              with open(offset_path, "w", encoding="utf-8") as state_file:
+                  state_file.write(str(new_offset))
           print(f"Telegram poll checkpoint: {new_offset}")
 
           # Process one durable queued EPUB per scheduled run. If Render is
