@@ -67,7 +67,7 @@ def test_rejects_non_epub_input():
 
 
 @pytest.mark.parametrize("kwargs,reason", [
-    ({"missing": True}, "archive_resource_missing"),
+    ({"missing": True}, "missing_manifest_item"),
     ({"empty": True}, "no_readable_text"),
     ({"corrupt": True}, "utf-8"),
 ])
