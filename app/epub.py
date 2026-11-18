@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from html.parser import HTMLParser
+import codecs
 from io import BytesIO
 import posixpath
 import re
@@ -70,6 +71,43 @@ class _TextExtractor(HTMLParser):
         lines = [re.sub(r"\s+", " ", line).strip() for line in raw.splitlines()]
         heading = re.sub(r"\s+", " ", " ".join(self.heading_parts)).strip()
         return heading, "\n".join(line for line in lines if line)
+
+
+
+def _decode_document(raw: bytes) -> str:
+    """Decode EPUB XHTML/HTML using its BOM or declared character encoding."""
+    sample = raw[:4096]
+    encoding = None
+
+    xml_decl = re.search(
+        br"""<\?xml[^>]*\bencoding\s*=\s*["']([^"']+)["']""",
+        sample[:512],
+        flags=re.IGNORECASE,
+    )
+    if xml_decl:
+        encoding = xml_decl.group(1).decode("ascii", errors="strict")
+
+    if encoding is None:
+        meta_charset = re.search(
+            br"""<meta\b[^>]*\bcharset\s*=\s*["']?([A-Za-z0-9._:-]+)""",
+            sample,
+            flags=re.IGNORECASE,
+        )
+        if meta_charset:
+            encoding = meta_charset.group(1).decode("ascii", errors="strict")
+
+    if encoding is None:
+        if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+            encoding = "utf-16"
+        elif raw.startswith(codecs.BOM_UTF8):
+            encoding = "utf-8-sig"
+        else:
+            encoding = "utf-8"
+
+    try:
+        return raw.decode(encoding, errors="strict")
+    except (LookupError, UnicodeDecodeError) as exc:
+        raise ValueError(f"unsupported_or_invalid_encoding:{encoding}") from exc
 
 
 def _local_name(tag: str) -> str:
@@ -200,14 +238,14 @@ def parse_epub(data: bytes) -> dict:
                     if path not in names:
                         raise ValueError("archive_resource_missing")
                     raw = archive.read(path)
-                    decoded = raw.decode("utf-8-sig", errors="strict")
+                    decoded = _decode_document(raw)
                     extractor = _TextExtractor()
                     extractor.feed(decoded)
                     extractor.close()
                     heading, text = extractor.result()
                     if not text:
                         raise ValueError("no_readable_text")
-                except (KeyError, UnicodeDecodeError, ValueError) as exc:
+                except (KeyError, UnicodeDecodeError, LookupError, ValueError) as exc:
                     reason = str(exc) or type(exc).__name__
                     failures.append({"idref": item_id, "reason": reason[:240]})
                     continue
