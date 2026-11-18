@@ -23,6 +23,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
           RENDER_INGEST_URL: https://fiqhbooksmcp-1.onrender.com/telegram/webhook
+          RENDER_PROCESS_URL: https://fiqhbooksmcp-1.onrender.com/telegram/process-next
           GH_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.repository }}
         run: |
@@ -116,4 +117,19 @@ jobs:
                   request_json(f"https://api.github.com/repos/{repo}/actions/variables",
                                method="POST", headers=gh_headers, payload=payload)
           print(f"Telegram poll checkpoint: {new_offset}")
+
+          # Process one durable queued EPUB per scheduled run. If Render is
+          # waking from sleep, the request timeout allows the instance to start.
+          worker_req = urllib.request.Request(
+              os.environ["RENDER_PROCESS_URL"],
+              data=b"{}",
+              method="POST",
+              headers={
+                  "Content-Type": "application/json",
+                  "X-Telegram-Bot-Api-Secret-Token": secret,
+              },
+          )
+          with urllib.request.urlopen(worker_req, timeout=240) as response:
+              worker_result = json.loads(response.read() or b"{}")
+              print("EPUB worker:", worker_result.get("status", "unknown"))
           PY
