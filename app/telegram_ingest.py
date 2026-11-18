@@ -88,7 +88,7 @@ def _claim_file(file_unique_id: str, chat_id: int, message_id: int,
                    file_name=EXCLUDED.file_name,
                    file_size=EXCLUDED.file_size,
                    status='processing', error=NULL, updated_at=now()
-               WHERE telegram_imports.status='failed'
+               WHERE telegram_imports.status IN ('failed','imported')
                RETURNING id""",
             (file_unique_id, chat_id, message_id, file_name, file_size),
         ).fetchone()
@@ -120,22 +120,45 @@ def _store_import(metadata: dict[str, Any], file_unique_id: str,
                   file_size: int | None) -> dict:
     chapters = metadata["chapters"]
     with connection() as conn:
-        book = conn.execute(
-            """INSERT INTO books (title,author,language,description)
-               VALUES (%s,%s,%s,%s)
-               RETURNING id,title""",
-            (metadata["title"], metadata["author"], metadata["language"],
-             "Imported from the private Telegram FiqhBooks channel; "
-             "original EPUB remains in Telegram."),
+        existing = conn.execute(
+            """SELECT book_id, edition_id FROM telegram_imports
+               WHERE file_unique_id=%s FOR UPDATE""",
+            (file_unique_id,),
         ).fetchone()
-        edition = conn.execute(
-            """INSERT INTO editions
-               (book_id,title,publisher,edition_year,source_file_key)
-               VALUES (%s,%s,%s,%s,%s)
-               RETURNING id""",
-            (book["id"], file_name, metadata["publisher"],
-             metadata["edition_year"], f"telegram:file_unique_id:{file_unique_id}"),
-        ).fetchone()
+
+        if existing and existing["book_id"] and existing["edition_id"]:
+            book = conn.execute(
+                """UPDATE books SET title=%s, author=%s, language=%s
+                   WHERE id=%s RETURNING id,title""",
+                (metadata["title"], metadata["author"], metadata["language"],
+                 existing["book_id"]),
+            ).fetchone()
+            edition = conn.execute(
+                """UPDATE editions SET title=%s, publisher=%s, edition_year=%s
+                   WHERE id=%s RETURNING id""",
+                (file_name, metadata["publisher"], metadata["edition_year"],
+                 existing["edition_id"]),
+            ).fetchone()
+            # Re-index in place: preserve the existing book and edition IDs.
+            conn.execute("DELETE FROM passages WHERE edition_id=%s",
+                         (existing["edition_id"],))
+        else:
+            book = conn.execute(
+                """INSERT INTO books (title,author,language,description)
+                   VALUES (%s,%s,%s,%s)
+                   RETURNING id,title""",
+                (metadata["title"], metadata["author"], metadata["language"],
+                 "Imported from the private Telegram FiqhBooks channel; "
+                 "original EPUB remains in Telegram."),
+            ).fetchone()
+            edition = conn.execute(
+                """INSERT INTO editions
+                   (book_id,title,publisher,edition_year,source_file_key)
+                   VALUES (%s,%s,%s,%s,%s)
+                   RETURNING id""",
+                (book["id"], file_name, metadata["publisher"],
+                 metadata["edition_year"], f"telegram:file_unique_id:{file_unique_id}"),
+            ).fetchone()
 
         passage_count = 0
         for locator, content in chapters:
