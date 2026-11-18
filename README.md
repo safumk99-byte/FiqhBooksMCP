@@ -46,3 +46,24 @@ indexed. The extractor also applies ZIP expansion and text-size safety limits.
 
 No original EPUB binary is stored in PostgreSQL. Searchable extracted passages are
 stored there and receive PostgreSQL Arabic-normalized GIN search indexes.
+
+### Import queue status and retry
+
+The worker status endpoint returns queue totals and the latest imports for an
+authenticated monitoring client:
+
+```http
+GET /telegram/status?limit=50
+X-Telegram-Bot-Api-Secret-Token: <TELEGRAM_WEBHOOK_SECRET>
+```
+
+A single failed import can be queued again without re-uploading the EPUB:
+
+```http
+POST /telegram/retry/<import_id>
+X-Telegram-Bot-Api-Secret-Token: <TELEGRAM_WEBHOOK_SECRET>
+```
+
+Only records currently marked `failed` and retaining a Telegram file reference
+can be retried. The endpoint does not reset active or completed imports. Queue
+processing continues through the scheduled poller in batches of up to four jobs.
