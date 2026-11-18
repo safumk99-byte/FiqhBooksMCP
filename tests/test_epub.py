@@ -56,6 +56,8 @@ def test_parse_epub_extracts_ordered_arabic_text_and_audit():
     assert len(result["chapters"]) == 2
     assert "كتاب الطهارة" in result["chapters"][0][0]
     assert "الوضوء شرط لصحة الصلاة" in result["chapters"][0][1]
+    assert "\n" in result["chapters"][0][1]
+    assert "\\n" not in result["chapters"][0][1]
     assert result["audit"]["validation"] == "passed"
     assert result["audit"]["linear_items_expected"] == 2
     assert result["audit"]["linear_items_extracted"] == 2
