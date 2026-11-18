@@ -41,7 +41,7 @@ class _TextExtractor(HTMLParser):
         if tag in {"h1", "h2", "h3", "title"}:
             self.heading_depth += 1
         if tag in _BLOCK_TAGS:
-            self.parts.append("\\n")
+            self.parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -53,7 +53,7 @@ class _TextExtractor(HTMLParser):
         if tag in {"h1", "h2", "h3", "title"} and self.heading_depth:
             self.heading_depth -= 1
         if tag in _BLOCK_TAGS:
-            self.parts.append("\\n")
+            self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
         if self.skip_depth:
@@ -67,9 +67,9 @@ class _TextExtractor(HTMLParser):
 
     def result(self) -> tuple[str, str]:
         raw = "".join(self.parts)
-        lines = [re.sub(r"\\s+", " ", line).strip() for line in raw.splitlines()]
-        heading = re.sub(r"\\s+", " ", " ".join(self.heading_parts)).strip()
-        return heading, "\\n".join(line for line in lines if line)
+        lines = [re.sub(r"\s+", " ", line).strip() for line in raw.splitlines()]
+        heading = re.sub(r"\s+", " ", " ".join(self.heading_parts)).strip()
+        return heading, "\n".join(line for line in lines if line)
 
 
 def _local_name(tag: str) -> str:
@@ -97,7 +97,7 @@ def _split_text(text: str, max_chars: int = CHUNK_CHARS) -> list[str]:
                 cut = max_chars
             chunks.append(paragraph[:cut].strip())
             paragraph = paragraph[cut:].strip()
-        candidate = f"{current}\\n{paragraph}" if current else paragraph
+        candidate = f"{current}\n{paragraph}" if current else paragraph
         if len(candidate) > max_chars and current:
             chunks.append(current)
             current = paragraph
