@@ -89,12 +89,33 @@ def _decode_document(raw: bytes) -> str:
 
     if encoding is None:
         meta_charset = re.search(
-            br"""<meta\b[^>]*\bcharset\s*=\s*["']?([A-Za-z0-9._:-]+)""",
+            br"""<meta\\b[^>]*\\bcharset\\s*=\\s*["']?([A-Za-z0-9._:-]+)""",
             sample,
             flags=re.IGNORECASE,
         )
         if meta_charset:
             encoding = meta_charset.group(1).decode("ascii", errors="strict")
+
+    if encoding is None:
+        meta_http_equiv = re.search(
+            br"""<meta\\b(?=[^>]*\\bhttp-equiv\\s*=\\s*["']?content-type)[^>]*>""",
+            sample,
+            flags=re.IGNORECASE,
+        )
+        if meta_http_equiv:
+            content_attr = re.search(
+                br"""\\bcontent\\s*=\\s*["']([^"']*)["']""",
+                meta_http_equiv.group(0),
+                flags=re.IGNORECASE,
+            )
+            if content_attr:
+                declared = re.search(
+                    br"""\\bcharset\\s*=\\s*([A-Za-z0-9._:-]+)""",
+                    content_attr.group(1),
+                    flags=re.IGNORECASE,
+                )
+                if declared:
+                    encoding = declared.group(1).decode("ascii", errors="strict")
 
     if encoding is None:
         if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
