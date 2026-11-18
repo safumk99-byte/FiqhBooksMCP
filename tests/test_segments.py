@@ -58,3 +58,23 @@ def test_unknown_marker_is_not_assigned_an_author():
     )
     assert segments[0]["segment_type"] == "unclassified"
     assert segments[0]["segment_author"] is None
+
+
+
+def test_turath_sequential_indexes_uses_official_print_page_mapping():
+    from app.main import _turath_sequential_indexes
+
+    info = {
+        "indexes": {
+            "page_map": [None, None, "1,2", "1,3", "1,4"],
+            "print_pg_to_pg": {"1,2": 3, "1,3": 4, "1,4": 5},
+        }
+    }
+    assert _turath_sequential_indexes(info) == [3, 4, 5]
+
+
+def test_turath_sequential_indexes_ignores_null_page_map_padding():
+    from app.main import _turath_sequential_indexes
+
+    info = {"indexes": {"page_map": [None, None, "1,2", "1,3"]}}
+    assert _turath_sequential_indexes(info) == [3, 4]
