@@ -55,6 +55,9 @@ def initialize_telegram_schema() -> None:
                 ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE telegram_imports
                 ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ;
+            UPDATE telegram_imports
+                SET processing_started_at=updated_at
+                WHERE status='processing' AND processing_started_at IS NULL;
             CREATE INDEX IF NOT EXISTS telegram_imports_status_idx
                 ON telegram_imports(status, created_at);
         """)
