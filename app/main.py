@@ -318,8 +318,8 @@ def search_turath_segments(
                    JOIN turath_source_pages p ON p.id=s.source_page_id
                    WHERE s.search_vector_ar @@
                          plainto_tsquery('simple', fiqh_normalize_arabic(%s))
-                     AND (%s IS NULL OR p.turath_book_id=%s)
-                     AND (%s IS NULL OR s.segment_type=%s)
+                     AND (%s::integer IS NULL OR p.turath_book_id=%s::integer)
+                     AND (%s::text IS NULL OR s.segment_type=%s::text)
                    ORDER BY rank DESC, p.turath_book_id, p.sequential_index,
                             s.segment_order
                    LIMIT %s""",
