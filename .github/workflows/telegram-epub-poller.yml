@@ -1,4 +1,5 @@
 name: Telegram EPUB Poller
+# One-time poller kick to collect pending Telegram channel updates.
 
 on:
   schedule:
