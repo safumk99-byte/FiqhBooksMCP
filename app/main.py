@@ -11,7 +11,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
 from app.search import expand_search_query, build_fallback_search
 from app.segments import parse_turath_page
-from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, ensure_telegram_webhook_registered
+from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema
 
 mcp = FastMCP(
     "FiqhBooksMCP",
@@ -504,11 +504,8 @@ async def lifespan(app: FastAPI):
     open_pool()
     initialize_schema()
     initialize_telegram_schema()
-    try:
-        ensure_telegram_webhook_registered()
-    except Exception as exc:
-        # Keep the main MCP service available even if Telegram setup is incomplete.
-        print(f"Telegram webhook registration skipped: {str(exc)[:200]}")
+    # Telegram updates are collected by the scheduled GitHub Actions poller.
+    # Do not register a webhook: getUpdates polling and webhooks are mutually exclusive.
     try:
         async with mcp.session_manager.run():
             yield
