@@ -247,3 +247,25 @@ async def register_telegram_webhook(request: Request):
 
 def attach_telegram_routes(app) -> None:
     app.include_router(router, prefix="/telegram", tags=["Telegram EPUB ingestion"])
+
+
+def ensure_telegram_webhook_registered() -> bool:
+    """Register the webhook automatically on service startup when configured."""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip()
+    if not bot_token or not secret or not webhook_url:
+        return False
+    if not webhook_url.startswith("https://"):
+        raise ValueError("TELEGRAM_WEBHOOK_URL must use HTTPS")
+    result = _telegram_request(
+        "setWebhook",
+        bot_token,
+        {
+            "url": webhook_url.rstrip("/") + "/telegram/webhook",
+            "secret_token": secret,
+            "allowed_updates": ["channel_post"],
+            "drop_pending_updates": False,
+        },
+    )
+    return bool(result)
