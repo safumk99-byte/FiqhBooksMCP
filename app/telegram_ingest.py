@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
@@ -64,34 +65,49 @@ def initialize_telegram_schema() -> None:
 
 
 def _telegram_request(method: str, token: str, payload: dict | None = None) -> dict:
-    try:
-        response = httpx.post(
-            f"{TELEGRAM_API}/bot{token}/{method}",
-            json=payload or {},
-            timeout=httpx.Timeout(45.0, connect=10.0),
-        )
-        response.raise_for_status()
-        body = response.json()
-    except httpx.HTTPStatusError as exc:
-        # Telegram's error description is safe to log; never include request URLs,
-        # which contain the bot token.
+    # Telegram's getFile endpoint can occasionally time out even when the file
+    # is valid. Retry transient transport failures before marking the import failed.
+    max_attempts = 3 if method == "getFile" else 1
+    for attempt in range(max_attempts):
         try:
-            error_body = exc.response.json()
-            description = str(error_body.get("description") or "HTTP error")
-        except (ValueError, AttributeError):
-            description = "HTTP error"
-        raise ValueError(
-            f"Telegram {method} returned HTTP {exc.response.status_code}: {description[:160]}"
-        ) from None
-    except (httpx.RequestError, ValueError) as exc:
-        # Exception strings from HTTP clients can contain the token-bearing URL.
-        raise ValueError(
-            f"Telegram {method} request failed ({type(exc).__name__})"
-        ) from None
-    if not body.get("ok"):
-        description = str(body.get("description") or "request rejected")
-        raise ValueError(f"Telegram {method} rejected the request: {description[:160]}")
-    return body.get("result") or {}
+            response = httpx.post(
+                f"{TELEGRAM_API}/bot{token}/{method}",
+                json=payload or {},
+                timeout=httpx.Timeout(60.0, connect=15.0),
+            )
+            response.raise_for_status()
+            body = response.json()
+        except httpx.HTTPStatusError as exc:
+            if method == "getFile" and exc.response.status_code in (429, 500, 502, 503, 504) and attempt + 1 < max_attempts:
+                time.sleep(2 ** attempt)
+                continue
+            # Telegram's error description is safe to log; never include request URLs,
+            # which contain the bot token.
+            try:
+                error_body = exc.response.json()
+                description = str(error_body.get("description") or "HTTP error")
+            except (ValueError, AttributeError):
+                description = "HTTP error"
+            raise ValueError(
+                f"Telegram {method} returned HTTP {exc.response.status_code}: {description[:160]}"
+            ) from None
+        except httpx.RequestError as exc:
+            if method == "getFile" and attempt + 1 < max_attempts:
+                time.sleep(2 ** attempt)
+                continue
+            # Exception strings from HTTP clients can contain the token-bearing URL.
+            raise ValueError(
+                f"Telegram {method} request failed ({type(exc).__name__})"
+            ) from None
+        except ValueError as exc:
+            raise ValueError(f"Telegram {method} returned an invalid JSON response") from None
+
+        if not body.get("ok"):
+            description = str(body.get("description") or "request rejected")
+            raise ValueError(f"Telegram {method} rejected the request: {description[:160]}")
+        return body.get("result") or {}
+
+    raise ValueError(f"Telegram {method} request failed after {max_attempts} attempts")
 
 
 def _claim_file(file_unique_id: str, file_id: str, chat_id: int, message_id: int,
