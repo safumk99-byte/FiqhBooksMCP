@@ -14,7 +14,7 @@ from urllib.parse import unquote
 from zipfile import BadZipFile, ZipFile
 import xml.etree.ElementTree as ET
 
-MAX_ARCHIVE_ENTRIES = 2000
+MAX_ARCHIVE_ENTRIES = 20000
 MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_EXTRACTED_TEXT = 30 * 1024 * 1024
 MAX_CHAPTERS = 500
