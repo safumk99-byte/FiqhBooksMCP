@@ -17,7 +17,6 @@ import xml.etree.ElementTree as ET
 MAX_ARCHIVE_ENTRIES = 20000
 MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_EXTRACTED_TEXT = 30 * 1024 * 1024
-MAX_CHAPTERS = 500
 CHUNK_CHARS = 3200
 
 _BLOCK_TAGS = {
@@ -170,8 +169,6 @@ def parse_epub(data: bytes) -> dict:
             chapters: list[tuple[str, str]] = []
             total_text = 0
             for index, item_id in enumerate(spine_ids, start=1):
-                if len(chapters) >= MAX_CHAPTERS:
-                    break
                 path = manifest.get(item_id)
                 if not path or path not in archive.namelist():
                     continue
