@@ -4,7 +4,7 @@ from zipfile import ZipFile
 from app.epub import parse_epub
 
 
-def make_epub() -> bytes:
+def make_epub(extra_entries: int = 0) -> bytes:
     output = BytesIO()
     with ZipFile(output, "w") as archive:
         archive.writestr(
@@ -22,6 +22,8 @@ def make_epub() -> bytes:
             '<manifest><item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>'
             '</manifest><spine><itemref idref="ch1"/></spine></package>',
         )
+        for index in range(extra_entries):
+            archive.writestr(f"OEBPS/assets/placeholder-{index}.bin", b"")
         archive.writestr(
             "OEBPS/chapter1.xhtml",
             '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>كتاب الطهارة</title>'
@@ -51,3 +53,9 @@ def test_parse_epub_rejects_non_epub_input():
         assert "not a valid EPUB" in str(exc)
     else:
         raise AssertionError("Expected invalid EPUB to be rejected")
+
+
+def test_parse_epub_accepts_books_with_more_than_2000_archive_entries():
+    result = parse_epub(make_epub(extra_entries=2001))
+    assert result["title"] == "اختبار الفقه"
+    assert result["chapters"]
