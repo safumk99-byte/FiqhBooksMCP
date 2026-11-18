@@ -108,11 +108,16 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
                      AND NOT EXISTS (
                          SELECT 1
                          FROM telegram_imports old_ti
+                         JOIN editions old_e ON old_e.id=old_ti.edition_id
+                         JOIN books old_b ON old_b.id=old_e.book_id
                          JOIN telegram_imports new_ti
-                           ON new_ti.file_unique_id=old_ti.file_unique_id
-                          AND new_ti.id > old_ti.id
+                           ON new_ti.id > old_ti.id
                           AND new_ti.status='imported'
+                         JOIN editions new_e ON new_e.id=new_ti.edition_id
+                         JOIN books new_b ON new_b.id=new_e.book_id
                          WHERE old_ti.edition_id=e.id
+                           AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
+                           AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
                      )
                    ORDER BY rank DESC, p.id DESC LIMIT %s""",
                 (alternative, alternative, limit),
@@ -148,11 +153,16 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
                      AND NOT EXISTS (
                          SELECT 1
                          FROM telegram_imports old_ti
+                         JOIN editions old_e ON old_e.id=old_ti.edition_id
+                         JOIN books old_b ON old_b.id=old_e.book_id
                          JOIN telegram_imports new_ti
-                           ON new_ti.file_unique_id=old_ti.file_unique_id
-                          AND new_ti.id > old_ti.id
+                           ON new_ti.id > old_ti.id
                           AND new_ti.status='imported'
+                         JOIN editions new_e ON new_e.id=new_ti.edition_id
+                         JOIN books new_b ON new_b.id=new_e.book_id
                          WHERE old_ti.edition_id=e.id
+                           AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
+                           AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
                      )
                    ORDER BY coverage.matched_terms DESC, rank DESC, p.id DESC
                    LIMIT %s""",
