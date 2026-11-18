@@ -2,6 +2,7 @@ import os
 import hmac
 import re
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -471,6 +472,212 @@ def search_turath_segments(
             if rows:
                 break
     return [dict(row) for row in rows]
+
+
+def _turath_id_from_description(description: str) -> int | None:
+    """Read a Turath numeric book ID from the existing library description."""
+    match = re.search(
+        r"(?:Turath\s+Book\s+ID|Turath\s+book_id)\s*[:=]\s*(\d+)",
+        description or "",
+        flags=re.IGNORECASE,
+    )
+    return int(match.group(1)) if match else None
+
+
+@mcp.tool()
+def get_library_search_status() -> dict:
+    """Report registered books with Turath sources and local searchable passages."""
+    with connection() as conn:
+        books = conn.execute(
+            """SELECT b.id, b.title, b.author, b.description,
+                      (SELECT count(*)::int FROM editions e
+                       JOIN passages p ON p.edition_id=e.id WHERE e.book_id=b.id) AS local_passages,
+                      (SELECT count(*)::int FROM editions e
+                       JOIN pages pg ON pg.edition_id=e.id WHERE e.book_id=b.id) AS local_pages
+               FROM books b ORDER BY b.id"""
+        ).fetchall()
+        indexed = conn.execute(
+            """SELECT p.turath_book_id, count(DISTINCT p.id)::int AS indexed_pages,
+                      count(s.id)::int AS indexed_segments
+               FROM turath_source_pages p
+               LEFT JOIN turath_segments s ON s.source_page_id=p.id
+               GROUP BY p.turath_book_id"""
+        ).fetchall()
+
+    indexed_by_id = {int(row["turath_book_id"]): dict(row) for row in indexed}
+    items = []
+    for row in books:
+        book = dict(row)
+        turath_id = _turath_id_from_description(book.get("description") or "")
+        local_passages = int(book.get("local_passages") or 0)
+        local_pages = int(book.get("local_pages") or 0)
+        local = indexed_by_id.get(turath_id, {}) if turath_id else {}
+        status = (
+            "turath_source_linked" if turath_id else
+            "local_passages_available_completeness_unverified" if local_passages else
+            "metadata_only_no_verified_search_source"
+        )
+        items.append({
+            "book_id": int(book["id"]), "title": book["title"],
+            "author": book.get("author") or "", "status": status,
+            "turath_book_id": turath_id, "local_pages": local_pages,
+            "local_passages": local_passages,
+            "turath_pages_indexed": int(local.get("indexed_pages") or 0),
+            "turath_segments_indexed": int(local.get("indexed_segments") or 0),
+        })
+    return {
+        "registered_books": len(items),
+        "turath_source_linked_books": sum(bool(item["turath_book_id"]) for item in items),
+        "local_passage_books": sum(item["local_passages"] > 0 for item in items),
+        "metadata_only_books": sum(item["status"] == "metadata_only_no_verified_search_source" for item in items),
+        "local_turath_indexed_pages": sum(item["turath_pages_indexed"] for item in items),
+        "local_turath_indexed_segments": sum(item["turath_segments_indexed"] for item in items),
+        "books": items,
+        "note": "A Turath ID is a source link, not proof of a locally completed index. Upstream full-text availability is checked at search time.",
+    }
+
+
+def _search_one_turath_book(book: dict, alternatives: list[str], result_limit: int) -> dict:
+    """Search one Turath book and retain the upstream page attribution."""
+    turath_id = int(book["turath_book_id"])
+    last_count, hits, used_query = 0, [], alternatives[0]
+    for alternative in alternatives:
+        payload = _turath_get(
+            f"{TURATH_API}/search",
+            {"q": alternative, "book": turath_id, "ver": "3"},
+        )
+        last_count = int(payload.get("count") or 0)
+        hits = payload.get("data") or []
+        if hits:
+            used_query = alternative
+            break
+
+    normalized = []
+    for hit in hits[:result_limit]:
+        raw_meta = hit.get("meta") or {}
+        if isinstance(raw_meta, str):
+            try:
+                meta = json.loads(raw_meta)
+            except json.JSONDecodeError:
+                meta = {}
+        else:
+            meta = raw_meta if isinstance(raw_meta, dict) else {}
+        normalized.append({
+            "source": "turath",
+            "library_book_id": int(book["id"]),
+            "library_book_title": book["title"],
+            "author": book.get("author") or meta.get("author_name") or "",
+            "turath_book_id": turath_id,
+            "turath_page_id": meta.get("page_id"),
+            "volume": meta.get("vol"),
+            "printed_page": meta.get("page"),
+            "source_book_title": meta.get("book_name") or book["title"],
+            "snippet": (hit.get("snip") or "")[:500],
+            "text": (hit.get("text") or "")[:1800],
+        })
+    return {
+        "library_book_id": int(book["id"]), "title": book["title"],
+        "turath_book_id": turath_id,
+        "status": "matched" if hits else "searched_no_match",
+        "matched_page_count": last_count,
+        "returned_matches": len(normalized),
+        "query_variant": used_query, "results": normalized,
+    }
+
+
+@mcp.tool()
+def search_all_books(query: str, results_per_book: int = 2) -> dict:
+    """Search every registered Turath-linked book and locally indexed non-Turath passages."""
+    alternatives = expand_search_query(query)
+    if not alternatives:
+        return {"query": query, "results": [], "error": "A non-empty search query is required."}
+    results_per_book = max(1, min(int(results_per_book), 3))
+
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT b.id, b.title, b.author, b.description,
+                      (SELECT count(*)::int FROM editions e
+                       JOIN passages p ON p.edition_id=e.id WHERE e.book_id=b.id) AS local_passages
+               FROM books b ORDER BY b.id"""
+        ).fetchall()
+
+    books = []
+    for row in rows:
+        book = dict(row)
+        turath_id = _turath_id_from_description(book.get("description") or "")
+        if turath_id:
+            book["turath_book_id"] = turath_id
+            books.append(book)
+
+    remote_results, source_errors, per_book_status = [], [], []
+    if books:
+        with ThreadPoolExecutor(max_workers=min(8, len(books))) as executor:
+            futures = {
+                executor.submit(_search_one_turath_book, book, alternatives, results_per_book): book
+                for book in books
+            }
+            for future in as_completed(futures):
+                book = futures[future]
+                try:
+                    outcome = future.result()
+                except Exception as exc:
+                    source_errors.append({
+                        "library_book_id": int(book["id"]), "title": book["title"],
+                        "turath_book_id": int(book["turath_book_id"]), "error": str(exc)[:300],
+                    })
+                    per_book_status.append({
+                        "library_book_id": int(book["id"]), "title": book["title"],
+                        "status": "source_error",
+                    })
+                    continue
+                per_book_status.append({key: outcome[key] for key in (
+                    "library_book_id", "title", "turath_book_id", "status",
+                    "matched_page_count", "returned_matches"
+                )})
+                remote_results.extend(outcome["results"])
+
+    remotely_matched_titles = {
+        item["title"] for item in per_book_status if item["status"] == "matched"
+    }
+    local_hits = search_passages(query, limit=100)
+    local_results = [{
+        "source": "local_passage_index",
+        "library_book_title": hit.get("book_title"),
+        "edition_title": hit.get("edition_title"),
+        "page_number": hit.get("page_number"),
+        "locator": hit.get("locator"),
+        "text": (hit.get("content") or "")[:1800],
+    } for hit in local_hits if hit.get("book_title") not in remotely_matched_titles]
+
+    local_searchable = [
+        {"library_book_id": int(row["id"]), "title": row["title"],
+         "local_passages": int(row["local_passages"] or 0)}
+        for row in rows
+        if not _turath_id_from_description(row.get("description") or "")
+        and int(row.get("local_passages") or 0) > 0
+    ]
+    not_searchable = [
+        {"library_book_id": int(row["id"]), "title": row["title"],
+         "reason": "No Turath source ID or local searchable passage index is registered."}
+        for row in rows
+        if not _turath_id_from_description(row.get("description") or "")
+        and int(row.get("local_passages") or 0) == 0
+    ]
+    remote_results.sort(key=lambda item: item["library_book_id"])
+    results = (remote_results + local_results)[:100]
+    return {
+        "query": query,
+        "registered_books": len(rows),
+        "turath_books_queried": len(books),
+        "turath_books_with_matches": sum(item["status"] == "matched" for item in per_book_status),
+        "local_searchable_books": local_searchable,
+        "books_without_search_source": not_searchable,
+        "source_errors": source_errors,
+        "per_book_status": sorted(per_book_status, key=lambda item: item["library_book_id"]),
+        "returned_result_count": len(results),
+        "results": results,
+        "coverage_note": "Turath-linked books are searched through Turath's full-text endpoint; non-Turath books are searched only where local passages exist. Books listed without a search source are not searched. A match count is not a claim that every matching page has been returned.",
+    }
 
 
 @mcp.tool()
