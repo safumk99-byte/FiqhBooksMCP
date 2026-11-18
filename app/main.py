@@ -105,6 +105,15 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
                    LEFT JOIN pages pg ON pg.id=p.page_id
                    WHERE p.search_vector_ar @@
                          plainto_tsquery('simple', fiqh_normalize_arabic(%s))
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM telegram_imports old_ti
+                         JOIN telegram_imports new_ti
+                           ON new_ti.file_unique_id=old_ti.file_unique_id
+                          AND new_ti.id > old_ti.id
+                          AND new_ti.status='imported'
+                         WHERE old_ti.edition_id=e.id
+                     )
                    ORDER BY rank DESC, p.id DESC LIMIT %s""",
                 (alternative, alternative, limit),
             ).fetchall()
@@ -136,6 +145,15 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
                    ) AS coverage
                    WHERE p.search_vector_ar @@ to_tsquery('simple', %s)
                      AND coverage.matched_terms >= %s
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM telegram_imports old_ti
+                         JOIN telegram_imports new_ti
+                           ON new_ti.file_unique_id=old_ti.file_unique_id
+                          AND new_ti.id > old_ti.id
+                          AND new_ti.status='imported'
+                         WHERE old_ti.edition_id=e.id
+                     )
                    ORDER BY coverage.matched_terms DESC, rank DESC, p.id DESC
                    LIMIT %s""",
                 (tsquery, tokens, tsquery, minimum_matches, limit),
