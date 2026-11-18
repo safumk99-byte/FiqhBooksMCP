@@ -274,6 +274,14 @@ def ensure_telegram_webhook_registered() -> bool:
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
     webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip()
     if not bot_token or not secret or not webhook_url:
+        missing = [
+            name for name, value in (
+                ("TELEGRAM_BOT_TOKEN", bot_token),
+                ("TELEGRAM_WEBHOOK_SECRET", secret),
+                ("TELEGRAM_WEBHOOK_URL", webhook_url),
+            ) if not value
+        ]
+        print("Telegram webhook registration skipped; missing configuration: " + ", ".join(missing))
         return False
     if not webhook_url.startswith("https://"):
         raise ValueError("TELEGRAM_WEBHOOK_URL must use HTTPS")
@@ -287,4 +295,5 @@ def ensure_telegram_webhook_registered() -> bool:
             "drop_pending_updates": False,
         },
     )
+    print("Telegram webhook registration successful.")
     return bool(result)
