@@ -65,15 +65,6 @@ jobs:
                   raw = response.read()
                   return json.loads(raw) if raw else {}
 
-          try:
-              variable = request_json(api, headers=gh_headers)
-              offset = int(variable.get("value", "0"))
-          except urllib.error.HTTPError as exc:
-              if exc.code == 404:
-                  offset = 0
-              else:
-                  raise
-
           base = f"https://api.telegram.org/bot{token}"
           # Switch the bot from webhook delivery to getUpdates without discarding queued posts.
           request_json(base + "/deleteWebhook", method="POST",
