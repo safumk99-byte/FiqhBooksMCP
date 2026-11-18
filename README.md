@@ -67,3 +67,19 @@ X-Telegram-Bot-Api-Secret-Token: <TELEGRAM_WEBHOOK_SECRET>
 Only records currently marked `failed` and retaining a Telegram file reference
 can be retried. The endpoint does not reset active or completed imports. Queue
 processing continues through the scheduled poller in batches of up to four jobs.
+
+
+## EPUB import dashboard
+
+Open `/admin/imports` on the deployed service. The dashboard uses HTTP Basic
+authentication and is served by the same FastAPI application as the import API.
+Use username `admin` and the value of `FIQHBOOKS_ADMIN_PASSWORD`. If that
+variable is not set, the service falls back to `MCP_BEARER_TOKEN` so an
+additional environment variable is not required for an initial setup. For
+production, set a separate strong `FIQHBOOKS_ADMIN_PASSWORD` in Render.
+
+The dashboard shows queue totals, recent EPUB imports, extraction audit
+metadata, errors, attempts, and a retry action for failed imports. Retry
+requests are protected by the same Basic authentication and an explicit
+same-origin action header. Credentials are never embedded in the dashboard
+HTML or browser JavaScript. Use HTTPS when accessing the dashboard.
