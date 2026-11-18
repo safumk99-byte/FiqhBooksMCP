@@ -105,3 +105,12 @@ def test_rejects_unknown_declared_encoding():
     raw = b'<?xml version="1.0" encoding="made-up-codec"?><html/>'
     with pytest.raises(ValueError, match="unsupported_or_invalid_encoding"):
         _decode_document(raw)
+
+
+def test_decode_legacy_html_http_equiv_charset():
+    raw = (
+        '<html><head><meta http-equiv="Content-Type" '
+        'content="text/html; charset=iso-8859-1"></head>'
+        '<body><p>café</p></body></html>'
+    ).encode("iso-8859-1")
+    assert "café" in _decode_document(raw)
