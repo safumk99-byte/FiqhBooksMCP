@@ -79,8 +79,8 @@ def test_rejects_incomplete_linear_spine(kwargs, reason):
 def test_non_linear_spine_item_is_explicitly_excluded():
     result = parse_epub(make_epub(non_linear=True))
     assert result["audit"]["non_linear_items_skipped"] == 1
-    assert result["audit"]["linear_items_expected"] == 1
-    assert result["audit"]["linear_items_extracted"] == 1
+    assert result["audit"]["linear_items_expected"] == 2
+    assert result["audit"]["linear_items_extracted"] == 2
 
 
 def test_long_text_is_split_within_chunk_limit():
