@@ -16,7 +16,7 @@ def make_epub(*, missing: bool = False, empty: bool = False,
             '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
             '<rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>',
         )
-        second_ref = '<itemref idref="ch2"/>' if missing or empty or corrupt else ''
+        second_ref = '<itemref idref="ch2"/>'
         linear_ref = '<itemref idref="nav" linear="no"/>' if non_linear else ''
         archive.writestr(
             "OEBPS/content.opf",
