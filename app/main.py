@@ -477,7 +477,7 @@ def search_turath_segments(
 def _turath_id_from_description(description: str) -> int | None:
     """Read a Turath numeric book ID from the existing library description."""
     match = re.search(
-        r"(?:Turath\\s+Book\\s+ID|Turath\\s+book_id)\\s*[:=]\\s*(\\d+)",
+        r"(?:Turath\s+Book\s+ID|Turath\s+book_id)\s*[:=]\s*(\d+)",
         description or "",
         flags=re.IGNORECASE,
     )
@@ -661,9 +661,7 @@ def search_all_books(query: str, results_per_book: int = 2) -> dict:
         if not _turath_id_from_description(row.get("description") or "")
         and int(row.get("local_passages") or 0) == 0
     ]
-    remote_results.sort(key=lambda item: (
-        item["library_book_id"], str(item.get("volume") or ""), str(item.get("printed_page") or "")
-    ))
+    remote_results.sort(key=lambda item: item["library_book_id"])
     results = (remote_results + local_results)[:100]
     return {
         "query": query,
