@@ -28,6 +28,7 @@ def initialize_telegram_schema() -> None:
             CREATE TABLE IF NOT EXISTS telegram_imports (
                 id BIGSERIAL PRIMARY KEY,
                 file_unique_id TEXT NOT NULL UNIQUE,
+                file_id TEXT,
                 chat_id BIGINT NOT NULL,
                 message_id BIGINT NOT NULL,
                 file_name TEXT NOT NULL,
@@ -43,6 +44,8 @@ def initialize_telegram_schema() -> None:
             );
             ALTER TABLE telegram_imports
                 ADD COLUMN IF NOT EXISTS audit JSONB NOT NULL DEFAULT '{}'::jsonb;
+            ALTER TABLE telegram_imports
+                ADD COLUMN IF NOT EXISTS file_id TEXT;
             CREATE INDEX IF NOT EXISTS telegram_imports_status_idx
                 ON telegram_imports(status);
         """)
@@ -79,14 +82,15 @@ def _telegram_request(method: str, token: str, payload: dict | None = None) -> d
     return body.get("result") or {}
 
 
-def _claim_file(file_unique_id: str, chat_id: int, message_id: int,
+def _claim_file(file_unique_id: str, file_id: str, chat_id: int, message_id: int,
                 file_name: str, file_size: int | None) -> bool:
     with connection() as conn:
         row = conn.execute(
             """INSERT INTO telegram_imports
-               (file_unique_id,chat_id,message_id,file_name,file_size,status)
-               VALUES (%s,%s,%s,%s,%s,'processing')
+               (file_unique_id,file_id,chat_id,message_id,file_name,file_size,status)
+               VALUES (%s,%s,%s,%s,%s,%s,'processing')
                ON CONFLICT (file_unique_id) DO UPDATE SET
+                   file_id=EXCLUDED.file_id,
                    chat_id=EXCLUDED.chat_id,
                    message_id=EXCLUDED.message_id,
                    file_name=EXCLUDED.file_name,
@@ -94,7 +98,7 @@ def _claim_file(file_unique_id: str, chat_id: int, message_id: int,
                    status='processing', error=NULL, updated_at=now()
                WHERE telegram_imports.status IN ('failed','imported')
                RETURNING id""",
-            (file_unique_id, chat_id, message_id, file_name, file_size),
+            (file_unique_id, file_id, chat_id, message_id, file_name, file_size),
         ).fetchone()
     return row is not None
 
@@ -239,7 +243,7 @@ async def telegram_webhook(
         raise HTTPException(status_code=413, detail="EPUB exceeds Telegram's 20 MB Bot API download limit")
 
     claimed = _claim_file(
-        str(file_unique_id), int(chat_id), int(message.get("message_id", 0)),
+        str(file_unique_id), str(file_id), int(chat_id), int(message.get("message_id", 0)),
         file_name, file_size if isinstance(file_size, int) else None,
     )
     if not claimed:
