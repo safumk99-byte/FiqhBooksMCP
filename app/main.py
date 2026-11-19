@@ -121,8 +121,8 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
                            AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
                            AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
                      )
-                   ORDER BY (rank * CASE WHEN coalesce(p.locator, '') ILIKE '%فهرس%' OR coalesce(p.locator, '') ILIKE '%index%' OR coalesce(p.locator, '') ILIKE '%جدول المحتويات%' THEN 0.25 ELSE 1.0 END) DESC, rank DESC, p.id DESC LIMIT %s""",
-                (alternative, alternative, limit),
+                   ORDER BY (ts_rank(p.search_vector_ar, plainto_tsquery('simple', fiqh_normalize_arabic(%s))) * CASE WHEN coalesce(p.locator, '') ILIKE '%فهرس%' OR coalesce(p.locator, '') ILIKE '%index%' OR coalesce(p.locator, '') ILIKE '%جدول المحتويات%' THEN 0.25 ELSE 1.0 END) DESC, rank DESC, p.id DESC LIMIT %s""",
+                (alternative, alternative, alternative, limit),
             ).fetchall()
             if rows:
                 break
