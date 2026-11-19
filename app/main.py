@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
-from app.search import expand_search_query, build_fallback_search
+from app.search import expand_search_query, build_fallback_search, normalize_search_result_value
 from app.segments import parse_turath_page
 from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, ensure_telegram_webhook_registered, process_next_telegram_import
 from app.admin_dashboard import attach_admin_dashboard
@@ -170,7 +170,7 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
                    LIMIT %s""",
                 (tsquery, tokens, tsquery, minimum_matches, limit),
             ).fetchall()
-    return [dict(r) for r in rows]
+    return [normalize_search_result_value(dict(r)) for r in rows]
 
 
 @mcp.tool()
