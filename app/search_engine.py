@@ -143,9 +143,11 @@ def search_library(
                       AND (%s::bigint IS NULL OR p.turath_book_id = %s::bigint)
                       AND (%s::text IS NULL OR s.segment_type = %s::text)
                 )
-                SELECT * FROM passage_hits
-                UNION ALL
-                SELECT * FROM turath_hits
+                SELECT * FROM (
+                    SELECT * FROM passage_hits
+                    UNION ALL
+                    SELECT * FROM turath_hits
+                ) AS combined_hits
                 ORDER BY phrase_match DESC,
                          (matched_terms::numeric / greatest(total_terms, 1)) DESC,
                          matched_terms DESC,
