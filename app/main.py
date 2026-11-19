@@ -86,113 +86,92 @@ def add_passage(edition_id: int, content: str, page_id: int | None = None, locat
 @mcp.tool()
 def search_passages(query: str, limit: int = 20) -> list[dict]:
     """Search normalized Arabic text, with a conservative multilingual fallback."""
-    try:
-        limit = max(1, min(limit, 100))
-        alternatives = expand_search_query(query)
-        if not alternatives:
-            return []
-    
-        with connection() as conn:
-            # Try exact all-terms matching for the original query and each explicit
-            # language expansion before using the broader OR-prefix fallback.
-            rows = []
-            for alternative in alternatives:
-                rows = conn.execute(
-                    """SELECT p.id, b.title AS book_title, e.title AS edition_title,
-                              p.page_id, pg.page_number, p.locator, p.content,
-                              ts_rank(p.search_vector_ar,
-                                      plainto_tsquery('simple', fiqh_normalize_arabic(%s))) AS rank
-                       FROM passages p
-                       JOIN editions e ON e.id=p.edition_id
-                       JOIN books b ON b.id=e.book_id
-                       LEFT JOIN pages pg ON pg.id=p.page_id
-                       WHERE p.search_vector_ar @@
-                             plainto_tsquery('simple', fiqh_normalize_arabic(%s))
-                         AND NOT EXISTS (
-                             SELECT 1
-                             FROM telegram_imports old_ti
-                             JOIN editions old_e ON old_e.id=old_ti.edition_id
-                             JOIN books old_b ON old_b.id=old_e.book_id
-                             JOIN telegram_imports new_ti
-                               ON new_ti.id > old_ti.id
-                              AND new_ti.status='imported'
-                             JOIN editions new_e ON new_e.id=new_ti.edition_id
-                             JOIN books new_b ON new_b.id=new_e.book_id
-                             WHERE old_ti.edition_id=e.id
-                               AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
-                               AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
-                         )
-                       ORDER BY (ts_rank(p.search_vector_ar, plainto_tsquery('simple', fiqh_normalize_arabic(%s))) * CASE WHEN coalesce(p.locator, '') ILIKE '%%فهرس%%' OR coalesce(p.locator, '') ILIKE '%%index%%' OR coalesce(p.locator, '') ILIKE '%%جدول المحتويات%%' THEN 0.25 ELSE 1.0 END) DESC, rank DESC, p.id DESC LIMIT %s""",
-                    (alternative, alternative, alternative, limit),
-                ).fetchall()
-                if rows:
-                    break
-    
-            if not rows:
-                # Require multi-token coverage for longer queries to reduce OR-fallback noise.
-                tokens = []
-                for alternative in alternatives:
-                    tokens.extend(re.findall(r"[\w]+", alternative, flags=re.UNICODE))
-                tokens = list(dict.fromkeys(token for token in tokens if token))
-                tsquery, minimum_matches = build_fallback_search(tokens)
-                if not tsquery:
-                    return []
-                rows = conn.execute(
-                    """SELECT p.id, b.title AS book_title, e.title AS edition_title,
-                              p.page_id, pg.page_number, p.locator, p.content,
-                              coverage.matched_terms,
-                              ts_rank(p.search_vector_ar, to_tsquery('simple', %s)) AS rank
-                       FROM passages p
-                       JOIN editions e ON e.id=p.edition_id
-                       JOIN books b ON b.id=e.book_id
-                       LEFT JOIN pages pg ON pg.id=p.page_id
-                       CROSS JOIN LATERAL (
-                           SELECT count(*)::int AS matched_terms
-                           FROM unnest(%s::text[]) AS q(token)
-                           WHERE p.search_vector_ar @@ to_tsquery('simple', q.token || ':*')
-                       ) AS coverage
-                       WHERE p.search_vector_ar @@ to_tsquery('simple', %s)
-                         AND coverage.matched_terms >= %s
-                         AND NOT EXISTS (
-                             SELECT 1
-                             FROM telegram_imports old_ti
-                             JOIN editions old_e ON old_e.id=old_ti.edition_id
-                             JOIN books old_b ON old_b.id=old_e.book_id
-                             JOIN telegram_imports new_ti
-                               ON new_ti.id > old_ti.id
-                              AND new_ti.status='imported'
-                             JOIN editions new_e ON new_e.id=new_ti.edition_id
-                             JOIN books new_b ON new_b.id=new_e.book_id
-                             WHERE old_ti.edition_id=e.id
-                               AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
-                               AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
-                         )
-                       ORDER BY (coverage.matched_terms * CASE WHEN coalesce(p.locator, '') ILIKE '%%فهرس%%' OR coalesce(p.locator, '') ILIKE '%%index%%' OR coalesce(p.locator, '') ILIKE '%%جدول المحتويات%%' THEN 0.25 ELSE 1.0 END) DESC, rank DESC, p.id DESC
-                       LIMIT %s""",
-                    (tsquery, tokens, tsquery, minimum_matches, limit),
-                ).fetchall()
-        return [normalize_search_result_value(dict(r)) for r in rows]
-    
-    except UnicodeDecodeError as exc:
-        import traceback
-        safe_error = str(exc).encode("ascii", "backslashreplace").decode("ascii")
-        safe_traceback = traceback.format_exc().encode("ascii", "backslashreplace").decode("ascii")
-        return [{"_diagnostic_error_type": type(exc).__name__, "_diagnostic_error": safe_error, "_diagnostic_traceback": safe_traceback[-6000:]}]
+    limit = max(1, min(limit, 100))
+    alternatives = expand_search_query(query)
+    if not alternatives:
+        return []
 
-@mcp.tool()
-def diagnose_search_passages_runtime(query: str = "الصلاة") -> dict:
-    """Temporary diagnostic: isolate search execution from passage-result serialization."""
-    try:
-        result = search_passages(query, 1)
-        return {
-            "status": "ok",
-            "count": len(result),
-            "first_result_keys": sorted(result[0].keys()) if result else [],
-            "content_is_text": isinstance(result[0].get("content"), str) if result else None,
-        }
-    except Exception as exc:
-        safe_error = str(exc).encode("ascii", "backslashreplace").decode("ascii")
-        return {"status": "error", "error_type": type(exc).__name__, "error": safe_error[:1200]}
+    with connection() as conn:
+        # Try exact all-terms matching for the original query and each explicit
+        # language expansion before using the broader OR-prefix fallback.
+        rows = []
+        for alternative in alternatives:
+            rows = conn.execute(
+                """SELECT p.id, b.title AS book_title, e.title AS edition_title,
+                          p.page_id, pg.page_number, p.locator, p.content,
+                          ts_rank(p.search_vector_ar,
+                                  plainto_tsquery('simple', fiqh_normalize_arabic(%s))) AS rank
+                   FROM passages p
+                   JOIN editions e ON e.id=p.edition_id
+                   JOIN books b ON b.id=e.book_id
+                   LEFT JOIN pages pg ON pg.id=p.page_id
+                   WHERE p.search_vector_ar @@
+                         plainto_tsquery('simple', fiqh_normalize_arabic(%s))
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM telegram_imports old_ti
+                         JOIN editions old_e ON old_e.id=old_ti.edition_id
+                         JOIN books old_b ON old_b.id=old_e.book_id
+                         JOIN telegram_imports new_ti
+                           ON new_ti.id > old_ti.id
+                          AND new_ti.status='imported'
+                         JOIN editions new_e ON new_e.id=new_ti.edition_id
+                         JOIN books new_b ON new_b.id=new_e.book_id
+                         WHERE old_ti.edition_id=e.id
+                           AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
+                           AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
+                     )
+                   ORDER BY (ts_rank(p.search_vector_ar, plainto_tsquery('simple', fiqh_normalize_arabic(%s))) * CASE WHEN coalesce(p.locator, '') ILIKE '%%فهرس%%' OR coalesce(p.locator, '') ILIKE '%%index%%' OR coalesce(p.locator, '') ILIKE '%%جدول المحتويات%%' THEN 0.25 ELSE 1.0 END) DESC, rank DESC, p.id DESC LIMIT %s""",
+                (alternative, alternative, alternative, limit),
+            ).fetchall()
+            if rows:
+                break
+
+        if not rows:
+            # Require multi-token coverage for longer queries to reduce OR-fallback noise.
+            tokens = []
+            for alternative in alternatives:
+                tokens.extend(re.findall(r"[\w]+", alternative, flags=re.UNICODE))
+            tokens = list(dict.fromkeys(token for token in tokens if token))
+            tsquery, minimum_matches = build_fallback_search(tokens)
+            if not tsquery:
+                return []
+            rows = conn.execute(
+                """SELECT p.id, b.title AS book_title, e.title AS edition_title,
+                          p.page_id, pg.page_number, p.locator, p.content,
+                          coverage.matched_terms,
+                          ts_rank(p.search_vector_ar, to_tsquery('simple', %s)) AS rank
+                   FROM passages p
+                   JOIN editions e ON e.id=p.edition_id
+                   JOIN books b ON b.id=e.book_id
+                   LEFT JOIN pages pg ON pg.id=p.page_id
+                   CROSS JOIN LATERAL (
+                       SELECT count(*)::int AS matched_terms
+                       FROM unnest(%s::text[]) AS q(token)
+                       WHERE p.search_vector_ar @@ to_tsquery('simple', q.token || ':*')
+                   ) AS coverage
+                   WHERE p.search_vector_ar @@ to_tsquery('simple', %s)
+                     AND coverage.matched_terms >= %s
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM telegram_imports old_ti
+                         JOIN editions old_e ON old_e.id=old_ti.edition_id
+                         JOIN books old_b ON old_b.id=old_e.book_id
+                         JOIN telegram_imports new_ti
+                           ON new_ti.id > old_ti.id
+                          AND new_ti.status='imported'
+                         JOIN editions new_e ON new_e.id=new_ti.edition_id
+                         JOIN books new_b ON new_b.id=new_e.book_id
+                         WHERE old_ti.edition_id=e.id
+                           AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
+                           AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
+                     )
+                   ORDER BY (coverage.matched_terms * CASE WHEN coalesce(p.locator, '') ILIKE '%%فهرس%%' OR coalesce(p.locator, '') ILIKE '%%index%%' OR coalesce(p.locator, '') ILIKE '%%جدول المحتويات%%' THEN 0.25 ELSE 1.0 END) DESC, rank DESC, p.id DESC
+                   LIMIT %s""",
+                (tsquery, tokens, tsquery, minimum_matches, limit),
+            ).fetchall()
+    return [normalize_search_result_value(dict(r)) for r in rows]
+
 
 @mcp.tool()
 def save_research_note(title: str, body: str, book_id: int | None = None, tags: list[str] | None = None) -> dict:
