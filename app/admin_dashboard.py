@@ -2,11 +2,12 @@ import hmac
 import os
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.db import connection
+from app.telegram_ingest import process_next_telegram_import
 
 router = APIRouter()
 _basic = HTTPBasic(auto_error=False)
@@ -102,6 +103,7 @@ def dashboard_import_status(
 @router.post("/api/retry/{import_id}")
 def dashboard_retry_import(
     import_id: int,
+    background_tasks: BackgroundTasks,
     _: Annotated[str, Depends(_admin_auth)],
     x_admin_action: Annotated[str | None, Header()] = None,
 ):
@@ -121,7 +123,11 @@ def dashboard_retry_import(
             status_code=409,
             detail="Import not found, not failed, or missing its Telegram file reference",
         )
-    return {"ok": True, "message": "Import queued for retry", "import": dict(row)}
+    # Retry must start immediately; there is no scheduled poller in webhook mode.
+    webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if webhook_secret:
+        background_tasks.add_task(process_next_telegram_import, webhook_secret)
+    return {"ok": True, "message": "Import queued for immediate retry", "import": dict(row)}
 
 
 def attach_admin_dashboard(app) -> None:
