@@ -35,3 +35,23 @@ def test_malay_qasar_phrase_expands_to_related_arabic_terms():
 
     expanded = expand_search_query("solat qasar")
     assert "قصر الصلاة السفر" in expanded
+
+
+def test_malay_jamak_taqdim_expands_to_specific_arabic_phrase():
+    from app.search import expand_search_query
+
+    expanded = expand_search_query("jamak taqdim")
+    assert "جمع التقديم" in expanded
+
+
+def test_malay_jamak_takhir_expands_to_specific_arabic_phrase():
+    from app.search import expand_search_query
+
+    expanded = expand_search_query("jamak takhir")
+    assert "جمع التاخير" in expanded
+
+
+def test_tashkeel_is_removed_from_expansion_matching():
+    from app.search import expand_search_query
+
+    assert "جمع التاخير" in expand_search_query("jamak ta'khir")
