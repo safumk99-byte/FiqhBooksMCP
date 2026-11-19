@@ -1,5 +1,6 @@
 """Arabic-aware query normalization and conservative multilingual expansion."""
 
+import re
 import unicodedata
 
 _ARABIC_FOLD = str.maketrans({
@@ -92,3 +93,60 @@ def normalize_search_result_value(value):
     if isinstance(value, (list, tuple)):
         return [normalize_search_result_value(item) for item in value]
     return value
+
+
+# High-frequency Arabic particles that add little value to broad fallback matching.
+# Keep content-bearing forms such as "فيها" because they can be part of a useful phrase.
+_ARABIC_SEARCH_STOPWORDS = {
+    "و", "ف", "ثم", "او", "أو", "بل", "قد", "لا", "لم", "لن", "ما",
+    "من", "في", "عن", "على", "الى", "إلى", "هو", "هي", "هم", "هن",
+    "به", "بها", "له", "لها", "هذا", "هذه", "ذلك", "تلك", "كان",
+    "كانت", "يكون", "تكون", "ان", "أن", "إن", "اذا", "إذا", "حيث",
+    "مثل", "مثلا", "مثلاً", "نحو", "لنحو", "عند", "مع", "كل", "غير",
+    "يجوز", "لايجوز", "ولا", "وهو", "وهي",
+}
+
+
+def _arabic_token_variants(token: str) -> list[str]:
+    """Return conservative spelling variants for one Arabic search token."""
+    variants = [token]
+    base = token
+    if len(base) > 4 and base[0] in {"و", "ف"}:
+        base = base[1:]
+        variants.append(base)
+    if len(base) > 4 and base.startswith("ال"):
+        variants.append(base[2:])
+    return list(dict.fromkeys(item for item in variants if len(item) > 1))
+
+
+def build_arabic_fallback_search(query: str) -> tuple[str, list[str], int]:
+    """Build an OR query from meaningful Arabic term groups and return coverage terms.
+
+    Each coverage term is a small OR-group of safe prefix variants. Coverage is
+    counted once per original query token, so a token's spelling variants do not
+    inflate relevance.
+    """
+    normalized = normalize_arabic_text(query)
+    raw_tokens = re.findall(r"[\w]+", normalized, flags=re.UNICODE)
+    groups = []
+    seen = set()
+    for token in raw_tokens:
+        if token in _ARABIC_SEARCH_STOPWORDS or len(token) < 2:
+            continue
+        variants = _arabic_token_variants(token)
+        if not variants:
+            continue
+        group = " | ".join(f"{variant}:*" for variant in variants)
+        if group not in seen:
+            seen.add(group)
+            groups.append(group)
+
+    if not groups:
+        return "", [], 0
+
+    tsquery = " | ".join(f"({group})" for group in groups)
+    if len(groups) < 3:
+        minimum_matches = 1
+    else:
+        minimum_matches = max(2, (len(groups) + 1) // 2)
+    return tsquery, groups, minimum_matches
