@@ -56,7 +56,6 @@ CREATE TABLE IF NOT EXISTS passages (
     page_id BIGINT REFERENCES pages(id) ON DELETE SET NULL,
     locator TEXT,
     content TEXT NOT NULL,
-    search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(content, ''))) STORED,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE passages
@@ -64,7 +63,6 @@ ALTER TABLE passages
     GENERATED ALWAYS AS (
         to_tsvector('simple', fiqh_normalize_arabic(content))
     ) STORED;
-CREATE INDEX IF NOT EXISTS passages_search_idx ON passages USING GIN(search_vector);
 CREATE INDEX IF NOT EXISTS passages_search_ar_idx ON passages USING GIN(search_vector_ar);
 
 CREATE TABLE IF NOT EXISTS turath_source_pages (
