@@ -190,3 +190,76 @@ def search_library(
         reverse=True,
     )
     return ordered[:limit]
+
+
+def get_search_coverage() -> dict:
+    """Report local indexed-text coverage without implying metadata is searchable."""
+    with connection() as conn:
+        books = conn.execute(
+            """
+            SELECT
+                b.id AS book_id,
+                b.title AS book_title,
+                b.author,
+                coalesce(ed.edition_count, 0)::integer AS edition_count,
+                coalesce(ps.passage_count, 0)::integer AS passage_count,
+                coalesce(ps.indexed_characters, 0)::bigint AS indexed_characters,
+                coalesce(pg.page_count, 0)::integer AS page_count,
+                CASE WHEN coalesce(ps.passage_count, 0) > 0
+                     THEN 'indexed' ELSE 'metadata_only' END AS index_status
+            FROM books b
+            LEFT JOIN (
+                SELECT book_id, count(*) AS edition_count
+                FROM editions GROUP BY book_id
+            ) ed ON ed.book_id = b.id
+            LEFT JOIN (
+                SELECT e.book_id, count(p.id) AS passage_count,
+                       coalesce(sum(length(p.content)), 0) AS indexed_characters
+                FROM editions e
+                LEFT JOIN passages p ON p.edition_id = e.id
+                GROUP BY e.book_id
+            ) ps ON ps.book_id = b.id
+            LEFT JOIN (
+                SELECT e.book_id, count(pg.id) AS page_count
+                FROM editions e
+                LEFT JOIN pages pg ON pg.edition_id = e.id
+                GROUP BY e.book_id
+            ) pg ON pg.book_id = b.id
+            ORDER BY b.id DESC
+            """
+        ).fetchall()
+        turath = conn.execute(
+            """
+            SELECT
+                p.turath_book_id,
+                max(p.book_title) AS book_title,
+                count(DISTINCT p.id)::integer AS indexed_pages,
+                count(s.id)::integer AS indexed_segments,
+                min(p.sequential_index) AS first_indexed_sequential_index,
+                max(p.sequential_index) AS last_indexed_sequential_index
+            FROM turath_source_pages p
+            LEFT JOIN turath_segments s ON s.source_page_id = p.id
+            GROUP BY p.turath_book_id
+            ORDER BY max(p.book_title)
+            """
+        ).fetchall()
+
+    book_rows = [normalize_search_result_value(dict(row)) for row in books]
+    turath_rows = [normalize_search_result_value(dict(row)) for row in turath]
+    indexed_books = sum(1 for row in book_rows if row["passage_count"] > 0)
+    return {
+        "registered_books": len(book_rows),
+        "books_with_local_passages": indexed_books,
+        "books_without_local_passages": len(book_rows) - indexed_books,
+        "total_local_passages": sum(row["passage_count"] for row in book_rows),
+        "total_local_indexed_characters": sum(
+            row["indexed_characters"] for row in book_rows
+        ),
+        "local_books": book_rows,
+        "turath_sources": turath_rows,
+        "important_note": (
+            "A registered book or Turath catalog record is not necessarily "
+            "fully indexed. These counts describe text currently stored in "
+            "the local search database only."
+        ),
+    }
