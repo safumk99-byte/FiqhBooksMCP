@@ -1,4 +1,4 @@
-"Arabic-aware query normalization and conservative multilingual expansion."""
+"""Arabic-aware query normalization and conservative multilingual expansion."""
 
 import unicodedata
 
