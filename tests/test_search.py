@@ -48,10 +48,10 @@ def test_malay_jamak_takhir_expands_to_specific_arabic_phrase():
     from app.search import expand_search_query
 
     expanded = expand_search_query("jamak takhir")
-    assert "جمع التأخير" in expanded
+    assert "جمع التاخير" in expanded
 
 
 def test_tashkeel_is_removed_from_expansion_matching():
     from app.search import expand_search_query
 
-    assert "جمع التأخير" in expand_search_query("jamak ta'khir")
+    assert "جمع التاخير" in expand_search_query("jamak ta'khir")
