@@ -1,13 +1,10 @@
 name: Telegram EPUB Poller
 # Manual poller kick to collect pending Telegram channel updates (2026-11-19, second check).
 
+# Disabled automatic getUpdates polling. Telegram now pushes channel_post updates
+# directly to the Render webhook, which starts EPUB import immediately.
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
