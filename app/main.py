@@ -504,6 +504,39 @@ def search_turath_segments(
             ).fetchall()
             if rows:
                 break
+        if not rows:
+            for alternative in alternatives:
+                tsquery, term_groups, minimum_matches = build_arabic_fallback_search(alternative)
+                if not tsquery:
+                    continue
+                rows = conn.execute(
+                    """SELECT
+                           p.turath_book_id, p.turath_page_id, p.sequential_index,
+                           p.volume, p.printed_page, p.book_title, p.page_author,
+                           s.segment_order, s.segment_type, s.segment_title,
+                           s.segment_author, s.source_marker, s.attribution_method,
+                           s.content, coverage.matched_terms,
+                           ts_rank_cd(s.search_vector_ar,
+                               to_tsquery('simple', %s)) AS rank
+                       FROM turath_segments s
+                       JOIN turath_source_pages p ON p.id=s.source_page_id
+                       CROSS JOIN LATERAL (
+                           SELECT count(*)::int AS matched_terms
+                           FROM unnest(%s::text[]) AS q(token)
+                           WHERE s.search_vector_ar @@ to_tsquery('simple', q.token)
+                       ) AS coverage
+                       WHERE s.search_vector_ar @@ to_tsquery('simple', %s)
+                         AND coverage.matched_terms >= %s
+                         AND (%s::integer IS NULL OR p.turath_book_id=%s::integer)
+                         AND (%s::text IS NULL OR s.segment_type=%s::text)
+                       ORDER BY coverage.matched_terms DESC, rank DESC,
+                                p.turath_book_id, p.sequential_index, s.segment_order
+                       LIMIT %s""",
+                    (tsquery, term_groups, tsquery, minimum_matches,
+                     book_id, book_id, segment_type, segment_type, limit),
+                ).fetchall()
+                if rows:
+                    break
     return [dict(row) for row in rows]
 
 
