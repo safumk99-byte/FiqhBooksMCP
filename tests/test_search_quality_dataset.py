@@ -34,3 +34,13 @@ def test_known_ranking_regressions_remain_in_the_evaluation_set():
     assert cases["jamak-taqdim-malay"]["status"] == "needs-ranking-review"
     assert cases["jamak-takhir-malay"]["status"] == "needs-ranking-review"
     assert 352 in cases["jamak-taqdim-malay"]["expected_passage_ids"]
+
+
+def test_urinary_catheter_long_arabic_regression_is_tracked():
+    dataset = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    cases = {case["id"]: case for case in dataset["cases"]}
+
+    case = cases["urinary-catheter-long-arabic"]
+    assert case["expected_passage_ids"] == [565990]
+    assert case["expected_locators"]
+    assert case["status"] == "needs-ranking-review"
