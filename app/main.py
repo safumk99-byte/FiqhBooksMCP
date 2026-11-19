@@ -85,12 +85,6 @@ def add_passage(edition_id: int, content: str, page_id: int | None = None, locat
     return dict(row)
 
 @mcp.tool()
-def search_library(query: str, limit: int = 20, source: str = "all") -> list[dict]:
-    """Search all locally indexed EPUB and Turath text in one relevance-ranked result set."""
-    return run_library_search(query=query, limit=limit, source=source)
-
-
-@mcp.tool()
 def get_search_coverage() -> dict:
     """Show which registered books actually have locally indexed searchable text."""
     return read_search_coverage()
@@ -98,8 +92,8 @@ def get_search_coverage() -> dict:
 
 @mcp.tool()
 def search_passages(query: str, limit: int = 20) -> list[dict]:
-    """Search indexed EPUB passages using unified phrase and term-coverage ranking."""
-    return run_library_search(query=query, limit=limit, source="epub")
+    """Search the complete locally indexed library (EPUB and indexed Turath text) with one unified ranking."""
+    return run_library_search(query=query, limit=limit, source="all")
 
 @mcp.tool()
 def save_research_note(title: str, body: str, book_id: int | None = None, tags: list[str] | None = None) -> dict:
@@ -133,20 +127,6 @@ def _turath_get(url: str, params: dict | None = None):
         raise ValueError(f"Turath API returned HTTP {exc.response.status_code}") from exc
     except (httpx.RequestError, ValueError) as exc:
         raise ValueError(f"Turath request failed: {str(exc)[:300]}") from exc
-
-@mcp.tool()
-def turath_search(query: str, author: int | None = None, book: int | None = None,
-                  category: int | None = None, page: int | None = None,
-                  precision: int | None = None, sort_field: str | None = None) -> dict:
-    """Search Turath's Arabic book catalog and indexed text; returns source references."""
-    params = {"q": query, "ver": "3"}
-    if author is not None: params["author"] = author
-    if book is not None: params["book"] = book
-    if category is not None: params["cat_id"] = category
-    if page is not None: params["page"] = page
-    if precision is not None: params["precision"] = precision
-    if sort_field is not None: params["sortField"] = sort_field
-    return _turath_get(f"{TURATH_API}/search", params)
 
 @mcp.tool()
 def turath_get_book_info(book_id: int) -> dict:
@@ -386,22 +366,6 @@ def turath_index_batch(book_id: int, batch_size: int = 5) -> dict:
         "resume_hint": "Call turath_index_batch again with the same book_id; completed pages are skipped and failed pages are retried.",
     }
 
-
-@mcp.tool()
-def search_turath_segments(
-    query: str,
-    book_id: int | None = None,
-    segment_type: str | None = None,
-    limit: int = 20,
-) -> list[dict]:
-    """Search indexed Turath source segments with unified phrase and coverage ranking."""
-    return run_library_search(
-        query=query,
-        limit=limit,
-        source="turath",
-        turath_book_id=book_id,
-        segment_type=segment_type,
-    )
 
 @mcp.tool()
 def turath_get_book_file(book_id: int) -> dict:
