@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
-from app.search import expand_search_query, build_fallback_search, normalize_search_result_value
+from app.search import expand_search_query, build_arabic_fallback_search, normalize_search_result_value
 from app.segments import parse_turath_page
 from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, ensure_telegram_webhook_registered, process_next_telegram_import
 from app.admin_dashboard import attach_admin_dashboard
@@ -128,48 +128,50 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
                 break
 
         if not rows:
-            # Require multi-token coverage for longer queries to reduce OR-fallback noise.
-            tokens = []
+            # Use meaningful Arabic term groups rather than every word in a long
+            # question. Common particles are ignored and conservative spelling
+            # variants are grouped, so one original term contributes at most
+            # one point to coverage.
             for alternative in alternatives:
-                tokens.extend(re.findall(r"[\w]+", alternative, flags=re.UNICODE))
-            tokens = list(dict.fromkeys(token for token in tokens if token))
-            tsquery, minimum_matches = build_fallback_search(tokens)
-            if not tsquery:
-                return []
-            rows = conn.execute(
-                """SELECT p.id, b.title AS book_title, e.title AS edition_title,
-                          p.page_id, pg.page_number, p.locator, p.content,
-                          coverage.matched_terms,
-                          ts_rank(p.search_vector_ar, to_tsquery('simple', %s)) AS rank
-                   FROM passages p
-                   JOIN editions e ON e.id=p.edition_id
-                   JOIN books b ON b.id=e.book_id
-                   LEFT JOIN pages pg ON pg.id=p.page_id
-                   CROSS JOIN LATERAL (
-                       SELECT count(*)::int AS matched_terms
-                       FROM unnest(%s::text[]) AS q(token)
-                       WHERE p.search_vector_ar @@ to_tsquery('simple', q.token || ':*')
-                   ) AS coverage
-                   WHERE p.search_vector_ar @@ to_tsquery('simple', %s)
-                     AND coverage.matched_terms >= %s
-                     AND NOT EXISTS (
-                         SELECT 1
-                         FROM telegram_imports old_ti
-                         JOIN editions old_e ON old_e.id=old_ti.edition_id
-                         JOIN books old_b ON old_b.id=old_e.book_id
-                         JOIN telegram_imports new_ti
-                           ON new_ti.id > old_ti.id
-                          AND new_ti.status='imported'
-                         JOIN editions new_e ON new_e.id=new_ti.edition_id
-                         JOIN books new_b ON new_b.id=new_e.book_id
-                         WHERE old_ti.edition_id=e.id
-                           AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
-                           AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
-                     )
-                   ORDER BY (coverage.matched_terms * CASE WHEN coalesce(p.locator, '') ILIKE '%%فهرس%%' OR coalesce(p.locator, '') ILIKE '%%index%%' OR coalesce(p.locator, '') ILIKE '%%جدول المحتويات%%' THEN 0.25 ELSE 1.0 END) DESC, rank DESC, p.id DESC
-                   LIMIT %s""",
-                (tsquery, tokens, tsquery, minimum_matches, limit),
-            ).fetchall()
+                tsquery, term_groups, minimum_matches = build_arabic_fallback_search(alternative)
+                if not tsquery:
+                    continue
+                rows = conn.execute(
+                    """SELECT p.id, b.title AS book_title, e.title AS edition_title,
+                              p.page_id, pg.page_number, p.locator, p.content,
+                              coverage.matched_terms,
+                              ts_rank_cd(p.search_vector_ar, to_tsquery('simple', %s)) AS rank
+                       FROM passages p
+                       JOIN editions e ON e.id=p.edition_id
+                       JOIN books b ON b.id=e.book_id
+                       LEFT JOIN pages pg ON pg.id=p.page_id
+                       CROSS JOIN LATERAL (
+                           SELECT count(*)::int AS matched_terms
+                           FROM unnest(%s::text[]) AS q(token)
+                           WHERE p.search_vector_ar @@ to_tsquery('simple', q.token)
+                       ) AS coverage
+                       WHERE p.search_vector_ar @@ to_tsquery('simple', %s)
+                         AND coverage.matched_terms >= %s
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM telegram_imports old_ti
+                             JOIN editions old_e ON old_e.id=old_ti.edition_id
+                             JOIN books old_b ON old_b.id=old_e.book_id
+                             JOIN telegram_imports new_ti
+                               ON new_ti.id > old_ti.id
+                              AND new_ti.status='imported'
+                             JOIN editions new_e ON new_e.id=new_ti.edition_id
+                             JOIN books new_b ON new_b.id=new_e.book_id
+                             WHERE old_ti.edition_id=e.id
+                               AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
+                               AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
+                         )
+                       ORDER BY coverage.matched_terms DESC, rank DESC, p.id DESC
+                       LIMIT %s""",
+                    (tsquery, term_groups, tsquery, minimum_matches, limit),
+                ).fetchall()
+                if rows:
+                    break
     return [normalize_search_result_value(dict(r)) for r in rows]
 
 
