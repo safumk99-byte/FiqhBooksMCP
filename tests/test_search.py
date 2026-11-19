@@ -61,5 +61,5 @@ def test_search_result_bytes_are_decoded_safely():
     from app.search import normalize_search_result_value
 
     assert normalize_search_result_value("الصلاة".encode("utf-8")) == "الصلاة"
-    assert normalize_search_result_value(b"abc\\xd9") == "abc�"
+    assert normalize_search_result_value(bytes([0x61, 0x62, 0x63, 0xD9])) == "abc�"
     assert normalize_search_result_value(memoryview("فقه".encode("utf-8"))) == "فقه"
