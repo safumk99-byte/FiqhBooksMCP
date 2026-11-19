@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
 from app.search import expand_search_query, build_arabic_fallback_search, normalize_search_result_value
+from app.search_engine import search_library as run_library_search, get_search_coverage as read_search_coverage
 from app.segments import parse_turath_page
 from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, ensure_telegram_webhook_registered, process_next_telegram_import
 from app.admin_dashboard import attach_admin_dashboard
@@ -84,96 +85,21 @@ def add_passage(edition_id: int, content: str, page_id: int | None = None, locat
     return dict(row)
 
 @mcp.tool()
+def search_library(query: str, limit: int = 20, source: str = "all") -> list[dict]:
+    """Search all locally indexed EPUB and Turath text in one relevance-ranked result set."""
+    return run_library_search(query=query, limit=limit, source=source)
+
+
+@mcp.tool()
+def get_search_coverage() -> dict:
+    """Show which registered books actually have locally indexed searchable text."""
+    return read_search_coverage()
+
+
+@mcp.tool()
 def search_passages(query: str, limit: int = 20) -> list[dict]:
-    """Search normalized Arabic text, with a conservative multilingual fallback."""
-    limit = max(1, min(limit, 100))
-    alternatives = expand_search_query(query)
-    if not alternatives:
-        return []
-
-    with connection() as conn:
-        # Try exact all-terms matching for the original query and each explicit
-        # language expansion before using the broader OR-prefix fallback.
-        rows = []
-        for alternative in alternatives:
-            rows = conn.execute(
-                """SELECT p.id, b.title AS book_title, e.title AS edition_title,
-                          p.page_id, pg.page_number, p.locator, p.content,
-                          ts_rank(p.search_vector_ar,
-                                  plainto_tsquery('simple', fiqh_normalize_arabic(%s))) AS rank
-                   FROM passages p
-                   JOIN editions e ON e.id=p.edition_id
-                   JOIN books b ON b.id=e.book_id
-                   LEFT JOIN pages pg ON pg.id=p.page_id
-                   WHERE p.search_vector_ar @@
-                         plainto_tsquery('simple', fiqh_normalize_arabic(%s))
-                     AND NOT EXISTS (
-                         SELECT 1
-                         FROM telegram_imports old_ti
-                         JOIN editions old_e ON old_e.id=old_ti.edition_id
-                         JOIN books old_b ON old_b.id=old_e.book_id
-                         JOIN telegram_imports new_ti
-                           ON new_ti.id > old_ti.id
-                          AND new_ti.status='imported'
-                         JOIN editions new_e ON new_e.id=new_ti.edition_id
-                         JOIN books new_b ON new_b.id=new_e.book_id
-                         WHERE old_ti.edition_id=e.id
-                           AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
-                           AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
-                     )
-                   ORDER BY (ts_rank(p.search_vector_ar, plainto_tsquery('simple', fiqh_normalize_arabic(%s))) * CASE WHEN coalesce(p.locator, '') ILIKE '%%فهرس%%' OR coalesce(p.locator, '') ILIKE '%%index%%' OR coalesce(p.locator, '') ILIKE '%%جدول المحتويات%%' THEN 0.25 ELSE 1.0 END) DESC, rank DESC, p.id DESC LIMIT %s""",
-                (alternative, alternative, alternative, limit),
-            ).fetchall()
-            if rows:
-                break
-
-        if not rows:
-            # Use meaningful Arabic term groups rather than every word in a long
-            # question. Common particles are ignored and conservative spelling
-            # variants are grouped, so one original term contributes at most
-            # one point to coverage.
-            for alternative in alternatives:
-                tsquery, term_groups, minimum_matches = build_arabic_fallback_search(alternative)
-                if not tsquery:
-                    continue
-                rows = conn.execute(
-                    """SELECT p.id, b.title AS book_title, e.title AS edition_title,
-                              p.page_id, pg.page_number, p.locator, p.content,
-                              coverage.matched_terms,
-                              ts_rank_cd(p.search_vector_ar, to_tsquery('simple', %s)) AS rank
-                       FROM passages p
-                       JOIN editions e ON e.id=p.edition_id
-                       JOIN books b ON b.id=e.book_id
-                       LEFT JOIN pages pg ON pg.id=p.page_id
-                       CROSS JOIN LATERAL (
-                           SELECT count(*)::int AS matched_terms
-                           FROM unnest(%s::text[]) AS q(token)
-                           WHERE p.search_vector_ar @@ to_tsquery('simple', q.token)
-                       ) AS coverage
-                       WHERE p.search_vector_ar @@ to_tsquery('simple', %s)
-                         AND coverage.matched_terms >= %s
-                         AND NOT EXISTS (
-                             SELECT 1
-                             FROM telegram_imports old_ti
-                             JOIN editions old_e ON old_e.id=old_ti.edition_id
-                             JOIN books old_b ON old_b.id=old_e.book_id
-                             JOIN telegram_imports new_ti
-                               ON new_ti.id > old_ti.id
-                              AND new_ti.status='imported'
-                             JOIN editions new_e ON new_e.id=new_ti.edition_id
-                             JOIN books new_b ON new_b.id=new_e.book_id
-                             WHERE old_ti.edition_id=e.id
-                               AND lower(btrim(old_b.title))=lower(btrim(new_b.title))
-                               AND lower(btrim(coalesce(old_b.author,'')))=lower(btrim(coalesce(new_b.author,'')))
-                         )
-                       ORDER BY coverage.matched_terms DESC, rank DESC, p.id DESC
-                       LIMIT %s""",
-                    (tsquery, term_groups, tsquery, minimum_matches, limit),
-                ).fetchall()
-                if rows:
-                    break
-    return [normalize_search_result_value(dict(r)) for r in rows]
-
+    """Search indexed EPUB passages using unified phrase and term-coverage ranking."""
+    return run_library_search(query=query, limit=limit, source="epub")
 
 @mcp.tool()
 def save_research_note(title: str, body: str, book_id: int | None = None, tags: list[str] | None = None) -> dict:
@@ -468,77 +394,14 @@ def search_turath_segments(
     segment_type: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
-    """Search independently indexed Turath source segments with their page and layer attribution."""
-    limit = max(1, min(limit, 100))
-    if segment_type and segment_type not in {
-        "matn", "sharh", "hashiyah", "editorial", "fatwa", "unclassified"
-    }:
-        raise ValueError("Unsupported segment_type")
-    alternatives = expand_search_query(query)
-    if not alternatives:
-        return []
-
-    with connection() as conn:
-        rows = []
-        for alternative in alternatives:
-            rows = conn.execute(
-                """SELECT
-                       p.turath_book_id, p.turath_page_id, p.sequential_index,
-                       p.volume, p.printed_page, p.book_title, p.page_author,
-                       s.segment_order, s.segment_type, s.segment_title,
-                       s.segment_author, s.source_marker, s.attribution_method,
-                       s.content,
-                       ts_rank(s.search_vector_ar,
-                           plainto_tsquery('simple', fiqh_normalize_arabic(%s))) AS rank
-                   FROM turath_segments s
-                   JOIN turath_source_pages p ON p.id=s.source_page_id
-                   WHERE s.search_vector_ar @@
-                         plainto_tsquery('simple', fiqh_normalize_arabic(%s))
-                     AND (%s::integer IS NULL OR p.turath_book_id=%s::integer)
-                     AND (%s::text IS NULL OR s.segment_type=%s::text)
-                   ORDER BY rank DESC, p.turath_book_id, p.sequential_index,
-                            s.segment_order
-                   LIMIT %s""",
-                (alternative, alternative, book_id, book_id,
-                 segment_type, segment_type, limit),
-            ).fetchall()
-            if rows:
-                break
-        if not rows:
-            for alternative in alternatives:
-                tsquery, term_groups, minimum_matches = build_arabic_fallback_search(alternative)
-                if not tsquery:
-                    continue
-                rows = conn.execute(
-                    """SELECT
-                           p.turath_book_id, p.turath_page_id, p.sequential_index,
-                           p.volume, p.printed_page, p.book_title, p.page_author,
-                           s.segment_order, s.segment_type, s.segment_title,
-                           s.segment_author, s.source_marker, s.attribution_method,
-                           s.content, coverage.matched_terms,
-                           ts_rank_cd(s.search_vector_ar,
-                               to_tsquery('simple', %s)) AS rank
-                       FROM turath_segments s
-                       JOIN turath_source_pages p ON p.id=s.source_page_id
-                       CROSS JOIN LATERAL (
-                           SELECT count(*)::int AS matched_terms
-                           FROM unnest(%s::text[]) AS q(token)
-                           WHERE s.search_vector_ar @@ to_tsquery('simple', q.token)
-                       ) AS coverage
-                       WHERE s.search_vector_ar @@ to_tsquery('simple', %s)
-                         AND coverage.matched_terms >= %s
-                         AND (%s::integer IS NULL OR p.turath_book_id=%s::integer)
-                         AND (%s::text IS NULL OR s.segment_type=%s::text)
-                       ORDER BY coverage.matched_terms DESC, rank DESC,
-                                p.turath_book_id, p.sequential_index, s.segment_order
-                       LIMIT %s""",
-                    (tsquery, term_groups, tsquery, minimum_matches,
-                     book_id, book_id, segment_type, segment_type, limit),
-                ).fetchall()
-                if rows:
-                    break
-    return [dict(row) for row in rows]
-
+    """Search indexed Turath source segments with unified phrase and coverage ranking."""
+    return run_library_search(
+        query=query,
+        limit=limit,
+        source="turath",
+        turath_book_id=book_id,
+        segment_type=segment_type,
+    )
 
 @mcp.tool()
 def turath_get_book_file(book_id: int) -> dict:
