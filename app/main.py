@@ -172,6 +172,22 @@ def search_passages(query: str, limit: int = 20) -> list[dict]:
             ).fetchall()
     return [dict(r) for r in rows]
 
+
+@mcp.tool()
+def diagnose_search_passages_runtime(query: str = "الصلاة") -> dict:
+    """Temporary diagnostic: isolate search execution from passage-result serialization."""
+    try:
+        result = search_passages(query, 1)
+        return {
+            "status": "ok",
+            "count": len(result),
+            "first_result_keys": sorted(result[0].keys()) if result else [],
+            "content_is_text": isinstance(result[0].get("content"), str) if result else None,
+        }
+    except Exception as exc:
+        safe_error = str(exc).encode("ascii", "backslashreplace").decode("ascii")
+        return {"status": "error", "error_type": type(exc).__name__, "error": safe_error[:1200]}
+
 @mcp.tool()
 def save_research_note(title: str, body: str, book_id: int | None = None, tags: list[str] | None = None) -> dict:
     """Save a research note, linked optionally to a book."""
