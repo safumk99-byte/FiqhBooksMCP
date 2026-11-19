@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
 from app.search import expand_search_query, build_arabic_fallback_search, normalize_search_result_value
-from app.search_engine import search_library as run_library_search
+from app.search_engine import search_library as run_library_search, get_search_coverage as read_search_coverage
 from app.segments import parse_turath_page
 from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, ensure_telegram_webhook_registered, process_next_telegram_import
 from app.admin_dashboard import attach_admin_dashboard
@@ -88,6 +88,12 @@ def add_passage(edition_id: int, content: str, page_id: int | None = None, locat
 def search_library(query: str, limit: int = 20, source: str = "all") -> list[dict]:
     """Search all locally indexed EPUB and Turath text in one relevance-ranked result set."""
     return run_library_search(query=query, limit=limit, source=source)
+
+
+@mcp.tool()
+def get_search_coverage() -> dict:
+    """Show which registered books actually have locally indexed searchable text."""
+    return read_search_coverage()
 
 
 @mcp.tool()
