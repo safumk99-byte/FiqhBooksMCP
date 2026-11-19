@@ -1,5 +1,5 @@
 name: Telegram EPUB Poller
-# Manual poller kick to collect pending Telegram channel updates (2026-11-19).
+# Manual poller kick to collect pending Telegram channel updates (2026-11-19, second check).
 
 on:
   schedule:
