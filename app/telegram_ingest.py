@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.db import connection
@@ -234,6 +234,7 @@ def _mark_failed(file_unique_id: str, error: str) -> None:
 @router.post("/webhook")
 async def telegram_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ):
     expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
@@ -277,6 +278,9 @@ async def telegram_webhook(
     if not claimed:
         return {"ok": True, "duplicate": True}
 
+    # Telegram webhook delivery is event-driven: acknowledge the upload immediately,
+    # then process the queued EPUB in the background without waiting for the next poll.
+    background_tasks.add_task(process_next_telegram_import, expected)
     return {"ok": True, "status": "queued", "file_name": file_name}
 
 
