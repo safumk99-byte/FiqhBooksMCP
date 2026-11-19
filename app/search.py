@@ -1,4 +1,4 @@
-"""Arabic-aware query normalization and conservative multilingual expansion."""
+"Arabic-aware query normalization and conservative multilingual expansion."""
 
 import unicodedata
 
@@ -25,6 +25,14 @@ _QUERY_EXPANSIONS = {
     "qasar solat": "قصر الصلاة السفر",
     "jamak solat musafir": "جمع الصلاة السفر",
     "solat jamak": "جمع الصلاة",
+    "jamak taqdim": "جمع التقديم",
+    "jamak takhir": "جمع التأخير",
+    "jamak ta'khir": "جمع التأخير",
+    "jamak taakhir": "جمع التأخير",
+    "jamak": "جمع",
+    "taqdim": "التقديم",
+    "takhir": "التأخير",
+    "ta'khir": "التأخير",
     "musafir": "مسافر سفر",
     "jam": "جمع",
     "travel": "سفر",
