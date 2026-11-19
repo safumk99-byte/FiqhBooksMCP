@@ -79,3 +79,16 @@ def build_fallback_search(tokens: list[str]) -> tuple[str, int]:
     tsquery = " | ".join(f"{token}:*" for token in unique_tokens)
     minimum_matches = 2 if len(unique_tokens) >= 3 else 1
     return tsquery, minimum_matches
+
+
+def normalize_search_result_value(value):
+    """Convert database binary text values to safe Unicode before MCP JSON serialization."""
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {key: normalize_search_result_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [normalize_search_result_value(item) for item in value]
+    return value
