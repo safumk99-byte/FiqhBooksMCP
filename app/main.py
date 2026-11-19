@@ -1,4 +1,5 @@
 import os
+import asyncio
 import hmac
 import re
 import json
@@ -11,7 +12,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from app.db import open_pool, close_pool, initialize_schema, connection
 from app.search import expand_search_query, build_fallback_search
 from app.segments import parse_turath_page
-from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, ensure_telegram_webhook_registered
+from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, ensure_telegram_webhook_registered, process_next_telegram_import
 from app.admin_dashboard import attach_admin_dashboard
 
 mcp = FastMCP(
@@ -536,6 +537,11 @@ async def lifespan(app: FastAPI):
     # Register the event-driven Telegram webhook. The webhook queues each EPUB
     # and starts its import in a background task; no scheduled polling is needed.
     ensure_telegram_webhook_registered()
+    # Recover one durable queued EPUB after a restart/deploy; process only one at a time
+    # so database growth can be checked before the next queued import begins.
+    webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if webhook_secret and os.getenv("TELEGRAM_BOT_TOKEN", ""):
+        asyncio.create_task(asyncio.to_thread(process_next_telegram_import, webhook_secret))
     try:
         async with mcp.session_manager.run():
             yield
