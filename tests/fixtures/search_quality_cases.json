@@ -2,7 +2,7 @@
   "dataset_version": 1,
   "purpose": "Production search-quality baseline for multilingual Shafi'i fiqh queries. Expected passage IDs and locators are grounded in live MCP search results checked on 2026-11-16.",
   "source_scope": {
-    "registered_books": 21,
+    "registered_books": 55,
     "important_limitation": "The live search corpus is not complete across all 21 registered books. These cases validate only passages currently indexed and returned by production."
   },
   "evaluation_policy": {
@@ -17,9 +17,18 @@
       "query": "jamak solat musafir",
       "language": "ms",
       "topic": "combining prayers while travelling",
-      "expected_passage_ids": [353, 352],
-      "expected_locators": ["Turath page_id 447; vol 1; printed page 531", "Turath page_id 446; vol 1; printed page 530"],
-      "observed_live_ids": [353, 352],
+      "expected_passage_ids": [
+        353,
+        352
+      ],
+      "expected_locators": [
+        "Turath page_id 447; vol 1; printed page 531",
+        "Turath page_id 446; vol 1; printed page 530"
+      ],
+      "observed_live_ids": [
+        353,
+        352
+      ],
       "status": "pass"
     },
     {
@@ -27,9 +36,18 @@
       "query": "solat qasar",
       "language": "ms",
       "topic": "shortening prayers during travel",
-      "expected_passage_ids": [349, 352],
-      "expected_locators": ["Turath page_id 437; vol 1; printed page 521", "Turath page_id 446; vol 1; printed page 530"],
-      "observed_live_ids": [349, 352],
+      "expected_passage_ids": [
+        349,
+        352
+      ],
+      "expected_locators": [
+        "Turath page_id 437; vol 1; printed page 521",
+        "Turath page_id 446; vol 1; printed page 530"
+      ],
+      "observed_live_ids": [
+        349,
+        352
+      ],
       "status": "pass"
     },
     {
@@ -37,9 +55,18 @@
       "query": "جمع الصلاة السفر",
       "language": "ar",
       "topic": "combining prayers while travelling",
-      "expected_passage_ids": [353, 352],
-      "expected_locators": ["Turath page_id 447; vol 1; printed page 531", "Turath page_id 446; vol 1; printed page 530"],
-      "observed_live_ids": [353, 352],
+      "expected_passage_ids": [
+        353,
+        352
+      ],
+      "expected_locators": [
+        "Turath page_id 447; vol 1; printed page 531",
+        "Turath page_id 446; vol 1; printed page 530"
+      ],
+      "observed_live_ids": [
+        353,
+        352
+      ],
       "status": "pass"
     },
     {
@@ -47,9 +74,18 @@
       "query": "قصر الصلاة",
       "language": "ar",
       "topic": "shortening prayers",
-      "expected_passage_ids": [349, 352],
-      "expected_locators": ["Turath page_id 437; vol 1; printed page 521", "Turath page_id 446; vol 1; printed page 530"],
-      "observed_live_ids": [349, 352],
+      "expected_passage_ids": [
+        349,
+        352
+      ],
+      "expected_locators": [
+        "Turath page_id 437; vol 1; printed page 521",
+        "Turath page_id 446; vol 1; printed page 530"
+      ],
+      "observed_live_ids": [
+        349,
+        352
+      ],
       "status": "pass"
     },
     {
@@ -57,9 +93,22 @@
       "query": "നമസ്കാരം ഖസർ",
       "language": "ml",
       "topic": "shortening prayers",
-      "expected_passage_ids": [352, 350, 119],
-      "expected_locators": ["Turath page_id 446; vol 1; printed page 530", "Turath page_id 438; vol 1; printed page 522", "page:117"],
-      "observed_live_ids": [352, 350, 103, 119],
+      "expected_passage_ids": [
+        352,
+        350,
+        119
+      ],
+      "expected_locators": [
+        "Turath page_id 446; vol 1; printed page 530",
+        "Turath page_id 438; vol 1; printed page 522",
+        "page:117"
+      ],
+      "observed_live_ids": [
+        352,
+        350,
+        103,
+        119
+      ],
       "status": "partial",
       "notes": "The first two results and Zubad page 117 are relevant; Zubad page 101 (passage 103) is a weaker/less direct hit."
     },
@@ -68,9 +117,22 @@
       "query": "qasr prayer travel",
       "language": "en",
       "topic": "shortening prayers during travel",
-      "expected_passage_ids": [352, 350, 119],
-      "expected_locators": ["Turath page_id 446; vol 1; printed page 530", "Turath page_id 438; vol 1; printed page 522", "page:117"],
-      "observed_live_ids": [352, 350, 103, 119],
+      "expected_passage_ids": [
+        352,
+        350,
+        119
+      ],
+      "expected_locators": [
+        "Turath page_id 446; vol 1; printed page 530",
+        "Turath page_id 438; vol 1; printed page 522",
+        "page:117"
+      ],
+      "observed_live_ids": [
+        352,
+        350,
+        103,
+        119
+      ],
       "status": "partial",
       "notes": "Passage 103 is a weaker hit than the travel chapter at passage 119."
     },
@@ -79,9 +141,16 @@
       "query": "jarak musafir qasar",
       "language": "ms",
       "topic": "minimum travel distance for qasr",
-      "expected_passage_ids": [349],
-      "expected_locators": ["Turath page_id 437; vol 1; printed page 521"],
-      "observed_live_ids": [349, 352],
+      "expected_passage_ids": [
+        349
+      ],
+      "expected_locators": [
+        "Turath page_id 437; vol 1; printed page 521"
+      ],
+      "observed_live_ids": [
+        349,
+        352
+      ],
       "status": "partial",
       "notes": "Passage 349 contains the travel-distance heading and 48-mile discussion. Passage 352 concerns jam' and is a weaker match."
     },
@@ -90,9 +159,15 @@
       "query": "tempoh menetap musafir",
       "language": "ms",
       "topic": "duration of intended residence ending travel concessions",
-      "expected_passage_ids": [351],
-      "expected_locators": ["Turath page_id 435; vol 1; printed page 519"],
-      "observed_live_ids": [351],
+      "expected_passage_ids": [
+        351
+      ],
+      "expected_locators": [
+        "Turath page_id 435; vol 1; printed page 519"
+      ],
+      "observed_live_ids": [
+        351
+      ],
       "status": "pass"
     },
     {
@@ -100,9 +175,15 @@
       "query": "شروط جمع التقديم",
       "language": "ar",
       "topic": "conditions of combining prayers in the earlier prayer time",
-      "expected_passage_ids": [352],
-      "expected_locators": ["Turath page_id 446; vol 1; printed page 530"],
-      "observed_live_ids": [352],
+      "expected_passage_ids": [
+        352
+      ],
+      "expected_locators": [
+        "Turath page_id 446; vol 1; printed page 530"
+      ],
+      "observed_live_ids": [
+        352
+      ],
       "status": "pass",
       "notes": "The returned passage explicitly states the three conditions, including beginning with the first prayer and intention of combining."
     },
@@ -111,9 +192,19 @@
       "query": "jamak taqdim",
       "language": "ms",
       "topic": "conditions of combining prayers in the earlier prayer time",
-      "expected_passage_ids": [352],
-      "expected_locators": ["Turath page_id 446; vol 1; printed page 530"],
-      "observed_live_ids": [353, 352, 350, 300, 254],
+      "expected_passage_ids": [
+        352
+      ],
+      "expected_locators": [
+        "Turath page_id 446; vol 1; printed page 530"
+      ],
+      "observed_live_ids": [
+        353,
+        352,
+        350,
+        300,
+        254
+      ],
       "status": "needs-ranking-review",
       "notes": "Relevant page 530 appears at rank 2, but unrelated Zubad passages occur within top 5. This is a measurable precision/ranking issue."
     },
@@ -122,11 +213,38 @@
       "query": "jamak takhir",
       "language": "ms",
       "topic": "combining prayers in the later prayer time",
-      "expected_passage_ids": [353, 352],
-      "expected_locators": ["Turath page_id 447; vol 1; printed page 531", "Turath page_id 446; vol 1; printed page 530"],
-      "observed_live_ids": [353, 352, 350, 300, 254],
+      "expected_passage_ids": [
+        353,
+        352
+      ],
+      "expected_locators": [
+        "Turath page_id 447; vol 1; printed page 531",
+        "Turath page_id 446; vol 1; printed page 530"
+      ],
+      "observed_live_ids": [
+        353,
+        352,
+        350,
+        300,
+        254
+      ],
       "status": "needs-ranking-review",
       "notes": "Relevant passages are present, but unrelated results in top 5 require precision improvement."
+    },
+    {
+      "id": "urinary-catheter-long-arabic",
+      "query": "ولا يجوز لنحو السلس تعليق نحو قارورة يقطر فيها بوله مثلا وهو في الصلاة بل تبطل الصلاة به",
+      "language": "ar",
+      "topic": "urinary incontinence and attaching a urine collection bottle during prayer",
+      "expected_passage_ids": [
+        565990
+      ],
+      "expected_locators": [
+        "كفاية النبيه في شرح التنبيه؛ Section 631 — part 1; الجزء 2، الصفحة 227"
+      ],
+      "observed_live_ids": [],
+      "status": "needs-ranking-review",
+      "notes": "Baseline: the full user-supplied wording did not surface the relevant passage in the first results. A shorter phrase found passage 565990 in Kifayat al-Nabih. Re-run this case after the fallback-search change."
     }
   ]
 }

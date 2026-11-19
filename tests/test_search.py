@@ -63,3 +63,28 @@ def test_search_result_bytes_are_decoded_safely():
     assert normalize_search_result_value("الصلاة".encode("utf-8")) == "الصلاة"
     assert normalize_search_result_value(bytes([0x61, 0x62, 0x63, 0xD9])) == "abc�"
     assert normalize_search_result_value(memoryview("فقه".encode("utf-8"))) == "فقه"
+
+
+
+def test_arabic_fallback_ignores_common_particles_and_keeps_key_terms():
+    from app.search import build_arabic_fallback_search
+
+    query, groups, minimum = build_arabic_fallback_search(
+        "ولا يجوز لنحو السلس تعليق نحو قارورة يقطر فيها بوله مثلا وهو في الصلاة بل تبطل الصلاة به"
+    )
+
+    assert "قارورة:*" in query
+    assert "يقطر:*" in query
+    assert "بوله:*" in query
+    assert "السلس:* | سلس:*" in query
+    assert len(groups) == 8
+    assert minimum == 4
+
+
+def test_arabic_fallback_counts_variants_as_one_original_term():
+    from app.search import build_arabic_fallback_search
+
+    query, groups, minimum = build_arabic_fallback_search("والسلس وقارورة يقطر فيها")
+    assert len(groups) == 4
+    assert minimum == 2
+    assert groups[0] == "والسلس:* | السلس:* | سلس:*"
