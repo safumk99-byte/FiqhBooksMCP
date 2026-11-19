@@ -55,3 +55,11 @@ def test_tashkeel_is_removed_from_expansion_matching():
     from app.search import expand_search_query
 
     assert "جمع التاخير" in expand_search_query("jamak ta'khir")
+
+
+def test_search_result_bytes_are_decoded_safely():
+    from app.search import normalize_search_result_value
+
+    assert normalize_search_result_value("الصلاة".encode("utf-8")) == "الصلاة"
+    assert normalize_search_result_value(b"abc\\xd9") == "abc�"
+    assert normalize_search_result_value(memoryview("فقه".encode("utf-8"))) == "فقه"
