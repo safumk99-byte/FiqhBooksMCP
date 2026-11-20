@@ -111,6 +111,7 @@ def search_library(
                         NULL::text AS edition_title,
                         NULL::bigint AS page_id,
                         NULL::integer AS page_number,
+                        NULL::text AS page_label,
                         NULL::text AS locator,
                         p.turath_book_id,
                         p.turath_page_id,
