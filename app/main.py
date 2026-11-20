@@ -13,7 +13,7 @@ from app.db import open_pool, close_pool, initialize_schema, connection
 from app.search import expand_search_query, build_arabic_fallback_search, normalize_search_result_value
 from app.search_engine import search_library as run_library_search, get_search_coverage as read_search_coverage
 from app.segments import parse_turath_page
-from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, initialize_epub_page_mapping, ensure_telegram_webhook_registered, process_next_telegram_import
+from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, ensure_telegram_webhook_registered, process_next_telegram_import
 from app.admin_dashboard import attach_admin_dashboard
 
 mcp = FastMCP(
@@ -433,8 +433,6 @@ async def lifespan(app: FastAPI):
     open_pool()
     initialize_schema()
     initialize_telegram_schema()
-    page_mapping = initialize_epub_page_mapping()
-    print("EPUB page mapping:", page_mapping)
     # Register the event-driven Telegram webhook. The webhook queues each EPUB
     # and starts its import in a background task; no scheduled polling is needed.
     ensure_telegram_webhook_registered()
