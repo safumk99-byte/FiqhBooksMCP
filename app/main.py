@@ -13,7 +13,7 @@ from app.db import open_pool, close_pool, initialize_schema, connection
 from app.search import expand_search_query, build_arabic_fallback_search, normalize_search_result_value
 from app.search_engine import search_library as run_library_search, get_search_coverage as read_search_coverage
 from app.segments import parse_turath_page
-from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, ensure_telegram_webhook_registered, process_next_telegram_import
+from app.telegram_ingest import attach_telegram_routes, initialize_telegram_schema, initialize_epub_page_mapping, ensure_telegram_webhook_registered, process_next_telegram_import
 from app.admin_dashboard import attach_admin_dashboard
 
 mcp = FastMCP(
@@ -83,6 +83,42 @@ def add_passage(edition_id: int, content: str, page_id: int | None = None, locat
             (edition_id, page_id, locator, content),
         ).fetchone()
     return dict(row)
+
+@mcp.tool()
+def get_page(edition_id: int, page_number: int) -> dict:
+    """Open one EPUB spine section and return its ordered searchable passages.
+
+    page_number is the EPUB reading-order section ordinal, not a printed page.
+    """
+    if edition_id <= 0 or page_number <= 0:
+        raise ValueError("edition_id and page_number must be positive integers")
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT pg.id AS page_id, pg.edition_id, pg.page_number,
+                      pg.page_label, e.title AS edition_title,
+                      b.title AS book_title,
+                      coalesce(
+                        json_agg(
+                          json_build_object(
+                            'passage_id', p.id,
+                            'locator', p.locator,
+                            'content', p.content
+                          ) ORDER BY p.id
+                        ) FILTER (WHERE p.id IS NOT NULL),
+                        '[]'::json
+                      ) AS passages
+               FROM pages pg
+               JOIN editions e ON e.id = pg.edition_id
+               JOIN books b ON b.id = e.book_id
+               LEFT JOIN passages p ON p.page_id = pg.id
+               WHERE pg.edition_id=%s AND pg.page_number=%s
+               GROUP BY pg.id,e.title,b.title""",
+            (edition_id, page_number),
+        ).fetchone()
+    if not row:
+        raise ValueError("EPUB section was not found")
+    return dict(row)
+
 
 @mcp.tool()
 def get_search_coverage() -> dict:
@@ -397,6 +433,8 @@ async def lifespan(app: FastAPI):
     open_pool()
     initialize_schema()
     initialize_telegram_schema()
+    page_mapping = initialize_epub_page_mapping()
+    print("EPUB page mapping:", page_mapping)
     # Register the event-driven Telegram webhook. The webhook queues each EPUB
     # and starts its import in a background task; no scheduled polling is needed.
     ensure_telegram_webhook_registered()
