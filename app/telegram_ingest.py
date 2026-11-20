@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -151,10 +152,93 @@ def _download_epub(token: str, file_id: str, file_size: int | None) -> bytes:
         raise ValueError("Could not download the EPUB from Telegram") from exc
 
 
+def _group_chapters(chapters: list[tuple[str, str]]) -> list[dict]:
+    """Group ordered EPUB chunks into their original linear spine documents."""
+    sections: list[dict] = []
+    for locator, content in chapters:
+        match = re.match(r"^(.*?) — part (\d+)$", locator)
+        if not match:
+            raise ValueError(f"Invalid EPUB passage locator: {locator[:160]}")
+        label, part_number_text = match.groups()
+        part_number = int(part_number_text)
+        if part_number == 1:
+            sections.append({"page_number": len(sections) + 1, "label": label, "chunks": []})
+        if not sections or part_number != len(sections[-1]["chunks"]) + 1:
+            raise ValueError(f"EPUB passage parts are out of order: {locator[:160]}")
+        sections[-1]["chunks"].append((locator, content))
+    if not sections:
+        raise ValueError("EPUB contains no sections to index")
+    return sections
+
+
+def initialize_epub_page_mapping() -> dict:
+    """Backfill EPUB spine-section records without changing passage text.
+
+    page_number is the EPUB linear-spine section ordinal, not a printed page.
+    Only editions whose existing ordered part locators validate are mapped.
+    """
+    migration_sql = """
+        WITH eligible AS (
+            SELECT e.id AS edition_id
+            FROM editions e
+            WHERE NOT EXISTS (SELECT 1 FROM pages pg WHERE pg.edition_id = e.id)
+              AND EXISTS (SELECT 1 FROM passages p WHERE p.edition_id = e.id)
+        ), parsed AS (
+            SELECT p.id, p.edition_id, p.locator,
+                   (regexp_match(p.locator, ' — part ([0-9]+)$'))[1]::integer AS part_no,
+                   row_number() OVER (PARTITION BY p.edition_id ORDER BY p.id) AS row_no,
+                   lag((regexp_match(p.locator, ' — part ([0-9]+)$'))[1]::integer)
+                     OVER (PARTITION BY p.edition_id ORDER BY p.id) AS previous_part
+            FROM passages p JOIN eligible e ON e.edition_id = p.edition_id
+        ), valid_editions AS (
+            SELECT edition_id FROM parsed GROUP BY edition_id
+            HAVING count(*) FILTER (WHERE part_no IS NULL) = 0
+               AND count(*) FILTER (WHERE row_no = 1 AND part_no <> 1) = 0
+               AND count(*) FILTER (
+                   WHERE part_no > 1
+                     AND (previous_part IS NULL OR part_no <> previous_part + 1)
+               ) = 0
+        ), numbered AS (
+            SELECT p.id, p.edition_id, p.locator,
+                   sum(CASE WHEN p.part_no = 1 THEN 1 ELSE 0 END)
+                     OVER (PARTITION BY p.edition_id ORDER BY p.id
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS section_no
+            FROM parsed p JOIN valid_editions v ON v.edition_id = p.edition_id
+        ), sections AS (
+            SELECT edition_id, section_no::integer AS section_no,
+                   regexp_replace((array_agg(locator ORDER BY id))[1],
+                                  ' — part [0-9]+$', '') AS section_title
+            FROM numbered GROUP BY edition_id, section_no
+        ), inserted AS (
+            INSERT INTO pages (edition_id, page_number, page_label, content)
+            SELECT edition_id, section_no,
+                   'EPUB section ' || section_no || ' — ' || section_title, ''
+            FROM sections
+            ON CONFLICT (edition_id, page_number) DO NOTHING
+            RETURNING id, edition_id, page_number
+        ), linked AS (
+            UPDATE passages p SET page_id = i.id
+            FROM numbered n
+            JOIN inserted i ON i.edition_id = n.edition_id
+                           AND i.page_number = n.section_no
+            WHERE p.id = n.id AND p.page_id IS NULL
+            RETURNING p.edition_id
+        )
+        SELECT
+            (SELECT count(*)::integer FROM inserted) AS pages_created,
+            (SELECT count(*)::integer FROM linked) AS passages_linked,
+            (SELECT count(DISTINCT edition_id)::integer FROM linked) AS editions_mapped
+    """
+    with connection() as conn:
+        row = conn.execute(migration_sql).fetchone()
+    return dict(row)
+
+
 def _store_import(metadata: dict[str, Any], file_unique_id: str,
                   chat_id: int, message_id: int, file_name: str,
                   file_size: int | None) -> dict:
     chapters = metadata["chapters"]
+    sections = _group_chapters(chapters)
     with connection() as conn:
         existing = conn.execute(
             """SELECT book_id, edition_id FROM telegram_imports
@@ -178,6 +262,8 @@ def _store_import(metadata: dict[str, Any], file_unique_id: str,
             # Re-index in place: preserve the existing book and edition IDs.
             conn.execute("DELETE FROM passages WHERE edition_id=%s",
                          (existing["edition_id"],))
+            conn.execute("DELETE FROM pages WHERE edition_id=%s",
+                         (existing["edition_id"],))
         else:
             book = conn.execute(
                 """INSERT INTO books (title,author,language,description)
@@ -197,27 +283,39 @@ def _store_import(metadata: dict[str, Any], file_unique_id: str,
             ).fetchone()
 
         passage_count = 0
-        for locator, content in chapters:
-            conn.execute(
-                """INSERT INTO passages (edition_id,locator,content)
-                   VALUES (%s,%s,%s)""",
-                (edition["id"], locator, content),
-            )
-            passage_count += 1
+        for section in sections:
+            page = conn.execute(
+                """INSERT INTO pages (edition_id,page_number,page_label,content)
+                   VALUES (%s,%s,%s,'') RETURNING id""",
+                (
+                    edition["id"], section["page_number"],
+                    f"EPUB section {section['page_number']} — {section['label']}",
+                ),
+            ).fetchone()
+            for locator, content in section["chunks"]:
+                conn.execute(
+                    """INSERT INTO passages (edition_id,page_id,locator,content)
+                       VALUES (%s,%s,%s,%s)""",
+                    (edition["id"], page["id"], locator, content),
+                )
+                passage_count += 1
 
+        audit = dict(metadata.get("audit", {}))
+        audit["epub_sections_indexed"] = len(sections)
         conn.execute(
             """UPDATE telegram_imports
                SET book_id=%s, edition_id=%s, status='imported',
                    audit=%s::jsonb, error=NULL, updated_at=now()
                WHERE file_unique_id=%s""",
-            (book["id"], edition["id"], json.dumps(metadata.get("audit", {}), ensure_ascii=False), file_unique_id),
+            (book["id"], edition["id"], json.dumps(audit, ensure_ascii=False), file_unique_id),
         )
     return {
         "book_id": book["id"],
         "title": book["title"],
         "edition_id": edition["id"],
         "indexed_passages": passage_count,
-        "audit": metadata.get("audit", {}),
+        "indexed_epub_sections": len(sections),
+        "audit": audit,
     }
 
 

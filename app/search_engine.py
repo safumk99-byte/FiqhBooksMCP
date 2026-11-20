@@ -53,6 +53,7 @@ def search_library(
                         e.title AS edition_title,
                         p.page_id,
                         pg.page_number,
+                        pg.page_label,
                         p.locator,
                         NULL::bigint AS turath_book_id,
                         NULL::bigint AS turath_page_id,
