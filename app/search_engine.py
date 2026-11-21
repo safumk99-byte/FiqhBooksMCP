@@ -69,10 +69,15 @@ def search_library(
                         p.content,
                         coverage.matched_terms,
                         %s::integer AS total_terms,
-                        CASE WHEN strpos(
-                            fiqh_normalize_arabic(p.content),
-                            fiqh_normalize_arabic(%s)
-                        ) > 0 THEN 1 ELSE 0 END AS phrase_match,
+                        CASE
+                            WHEN cardinality(regexp_split_to_array(
+                                btrim(fiqh_normalize_arabic(%s)), '\\s+'
+                            )) >= 2
+                             AND p.search_vector_ar @@ phraseto_tsquery(
+                                'simple', fiqh_normalize_arabic(%s)
+                             )
+                            THEN 1 ELSE 0
+                        END AS phrase_match,
                         ts_rank_cd(p.search_vector_ar, to_tsquery('simple', %s)) AS rank
                     FROM passages p
                     JOIN editions e ON e.id = p.edition_id
@@ -127,10 +132,15 @@ def search_library(
                         s.content,
                         coverage.matched_terms,
                         %s::integer AS total_terms,
-                        CASE WHEN strpos(
-                            fiqh_normalize_arabic(s.content),
-                            fiqh_normalize_arabic(%s)
-                        ) > 0 THEN 1 ELSE 0 END AS phrase_match,
+                        CASE
+                            WHEN cardinality(regexp_split_to_array(
+                                btrim(fiqh_normalize_arabic(%s)), '\\s+'
+                            )) >= 2
+                             AND s.search_vector_ar @@ phraseto_tsquery(
+                                'simple', fiqh_normalize_arabic(%s)
+                             )
+                            THEN 1 ELSE 0
+                        END AS phrase_match,
                         ts_rank_cd(s.search_vector_ar, to_tsquery('simple', %s)) AS rank
                     FROM turath_segments s
                     JOIN turath_source_pages p ON p.id = s.source_page_id
@@ -157,9 +167,9 @@ def search_library(
                 LIMIT %s
                 """,
                 (
-                    len(term_groups), alternative, tsquery, term_groups,
+                    len(term_groups), alternative, alternative, tsquery, term_groups,
                     source, tsquery, minimum_matches,
-                    len(term_groups), alternative, tsquery, term_groups,
+                    len(term_groups), alternative, alternative, tsquery, term_groups,
                     source, tsquery, minimum_matches,
                     turath_book_id, turath_book_id, segment_type, segment_type,
                     max(limit * 3, 30),
