@@ -136,6 +136,18 @@ def _arabic_token_variants(token: str) -> list[str]:
         variants.append(base)
     if len(base) > 4 and base.startswith("ال"):
         variants.append(base[2:])
+
+    # Conservative Arabic sound-plural normalization. Keep the original and
+    # article-stripped forms, then add stems for common masculine/feminine
+    # plural endings. Each token still counts as one coverage group.
+    for form in list(variants):
+        for suffix in ("ون", "ين", "ات"):
+            if form.endswith(suffix) and len(form) > len(suffix) + 3:
+                stem = form[:-len(suffix)]
+                variants.append(stem)
+                if len(stem) > 4 and stem.startswith("ال"):
+                    variants.append(stem[2:])
+
     return list(dict.fromkeys(item for item in variants if len(item) > 1))
 
 

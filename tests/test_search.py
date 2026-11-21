@@ -138,3 +138,23 @@ def test_interrogative_ma_is_not_forced_as_a_negation_particle():
 
     assert "(ما:*)" not in query
     assert "(ما:*) &" not in query
+
+
+
+def test_arabic_plural_forms_include_conservative_singular_stems():
+    from app.search import _arabic_token_variants
+
+    assert "مسافر" in _arabic_token_variants("المسافرون")
+    assert "مسافر" in _arabic_token_variants("المسافرين")
+    assert "شافعي" in _arabic_token_variants("الشافعيين")
+    assert "طاهر" in _arabic_token_variants("الطاهرات")
+
+
+def test_arabic_plural_variants_count_as_one_search_term_group():
+    from app.search import build_arabic_fallback_search
+
+    query, groups, minimum = build_arabic_fallback_search("المسافرون")
+
+    assert len(groups) == 1
+    assert "مسافر:*" in query
+    assert minimum == 1
