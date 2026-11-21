@@ -1,10 +1,10 @@
-"""Run the live-library search quality benchmark against the existing database.
+"""Run the production search-quality benchmark against the existing database.
 
 Usage:
     python -m scripts.run_search_benchmark --limit 10
 
-The relevance judgments are intentionally partial. Metrics are therefore
-reported as measured against the known seed judgments, not as corpus-wide truth.
+Expected passage IDs are a manually reviewed, partial relevance set. The report
+never treats unjudged results as irrelevant or a search hit as a fiqh ruling.
 """
 from __future__ import annotations
 
@@ -14,36 +14,51 @@ from pathlib import Path
 
 from app.search_engine import search_library
 
+DEFAULT_CASES = (
+    Path(__file__).resolve().parent.parent
+    / "tests"
+    / "fixtures"
+    / "search_quality_cases.json"
+)
 
-DEFAULT_CASES = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "search_quality_cases.json"
 
-
-def _title_matches(result: dict, expected_titles: list[str]) -> bool:
-    title = str(result.get("book_title") or "").casefold()
-    return any(expected.casefold() in title for expected in expected_titles)
-
-
-def score_case(results: list[dict], expected_titles: list[str], k: int = 5) -> dict:
-    """Score one result list against known relevant book-title judgments."""
-    if not expected_titles:
+def score_case(results: list[dict], expected_ids: list[int], k: int = 5) -> dict:
+    """Score results against exact database passage/segment IDs."""
+    if not expected_ids:
         return {
             "judged": False,
             "precision_at_k": None,
             "recall_at_k": None,
             "reciprocal_rank": None,
             "relevant_found_at_k": 0,
+            "observed_ids_at_k": [
+                int(row["source_record_id"])
+                for row in results[:k]
+                if row.get("source_record_id") is not None
+            ],
         }
 
     top = results[:k]
-    relevant_flags = [_title_matches(row, expected_titles) for row in top]
-    found = sum(relevant_flags)
-    first_rank = next((i + 1 for i, matched in enumerate(relevant_flags) if matched), None)
+    expected = {int(value) for value in expected_ids}
+    observed = [
+        int(row["source_record_id"])
+        for row in top
+        if row.get("source_record_id") is not None
+    ]
+    found_ranks = [
+        rank for rank, value in enumerate(observed, start=1)
+        if value in expected
+    ]
+    found = len(set(observed) & expected)
+    first_rank = min(found_ranks) if found_ranks else None
     return {
         "judged": True,
         "precision_at_k": round(found / k, 4),
-        "recall_at_k": round(found / len(expected_titles), 4),
+        "recall_at_k": round(found / len(expected), 4),
         "reciprocal_rank": round(1 / first_rank, 4) if first_rank else 0.0,
         "relevant_found_at_k": found,
+        "observed_ids_at_k": observed,
+        "missing_expected_ids": sorted(expected - set(observed)),
     }
 
 
@@ -52,16 +67,28 @@ def run_benchmark(limit: int = 10, cases_path: Path = DEFAULT_CASES) -> dict:
     rows = []
     for case in fixture["cases"]:
         results = search_library(case["query"], limit=limit, source="all")
-        score = score_case(results, case.get("expected_titles", []), k=min(5, limit))
+        score = score_case(
+            results,
+            case.get("expected_passage_ids", []),
+            k=min(5, limit),
+        )
         rows.append({
             "id": case["id"],
             "query": case["query"],
+            "topic": case.get("topic"),
+            "baseline_status": case.get("status"),
             "result_count": len(results),
-            "required_results_ok": bool(results) if case.get("require_results") else True,
-            "expected_titles": case.get("expected_titles", []),
+            "expected_passage_ids": case.get("expected_passage_ids", []),
+            "expected_locators": case.get("expected_locators", []),
             "top_results": [
                 {
+                    "source_type": result.get("source_type"),
+                    "source_record_id": result.get("source_record_id"),
                     "book_title": result.get("book_title"),
+                    "turath_page_id": result.get("turath_page_id"),
+                    "volume": result.get("volume"),
+                    "printed_page": result.get("printed_page"),
+                    "segment_order": result.get("segment_order"),
                     "matched_terms": result.get("matched_terms"),
                     "total_terms": result.get("total_terms"),
                     "phrase_match": result.get("phrase_match"),
@@ -73,13 +100,11 @@ def run_benchmark(limit: int = 10, cases_path: Path = DEFAULT_CASES) -> dict:
         })
 
     judged = [row for row in rows if row["judged"]]
-    summary = {
+    return {
+        "dataset_version": fixture.get("dataset_version"),
         "case_count": len(rows),
         "judged_case_count": len(judged),
-        "smoke_case_count": len(rows) - len(judged),
-        "empty_required_result_cases": [
-            row["id"] for row in rows if not row["required_results_ok"]
-        ],
+        "unjudged_case_count": len(rows) - len(judged),
         "mean_precision_at_5": (
             round(sum(row["precision_at_k"] for row in judged) / len(judged), 4)
             if judged else None
@@ -93,13 +118,12 @@ def run_benchmark(limit: int = 10, cases_path: Path = DEFAULT_CASES) -> dict:
             if judged else None
         ),
         "note": (
-            "Expected titles are partial, live-verified seed judgments. "
-            "Unjudged smoke cases measure retrieval availability only. "
-            "A zero score may indicate ranking failure or incomplete local corpus."
+            "Judgments are partial and cover only indexed passages known when "
+            "the fixture was curated. Missing hits may reflect search ranking "
+            "or absent local corpus; inspect coverage before changing ranking."
         ),
         "cases": rows,
     }
-    return summary
 
 
 def main() -> None:
