@@ -47,9 +47,11 @@ def _locator_matches(record: dict, locator: str | None) -> bool:
         return record.get("source_type") == "epub"
 
     # EPUB locators are stable section labels such as "Section 631 — part 1".
+    record_locator = str(record.get("locator") or "").strip()
     return (
         record.get("source_type") == "epub"
-        and str(record.get("locator") or "").strip() in locator
+        and bool(record_locator)
+        and record_locator in locator
     )
 
 
