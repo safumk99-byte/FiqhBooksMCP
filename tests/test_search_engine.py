@@ -64,7 +64,7 @@ def test_unified_search_merges_epub_and_turath_and_prefers_phrase_match(monkeypa
     monkeypatch.setattr(search_engine, "connection", fake_connection)
 
     results = search_engine.search_library(
-        "ولا يجوز لمن به سلس البول أن يعلق قارورة يقطر فيها"
+        "ولا يجوز لمن به سلس البول ان يعلق قارورة يقطر فيها"
     )
 
     assert [item["source_type"] for item in results] == ["turath", "epub"]
@@ -77,8 +77,8 @@ def test_unified_search_merges_epub_and_turath_and_prefers_phrase_match(monkeypa
     assert "phraseto_tsquery" in fake_conn.calls[0][0]
     assert "strpos(" not in fake_conn.calls[0][0]
     assert fake_conn.calls[0][1][1:3] == (
-        "ولا يجوز لمن به سلس البول أن يعلق قارورة يقطر فيها",
-        "ولا يجوز لمن به سلس البول أن يعلق قارورة يقطر فيها",
+        "ولا يجوز لمن به سلس البول ان يعلق قارورة يقطر فيها",
+        "ولا يجوز لمن به سلس البول ان يعلق قارورة يقطر فيها",
     )
 
 
