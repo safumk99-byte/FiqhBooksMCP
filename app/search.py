@@ -98,12 +98,20 @@ def normalize_search_result_value(value):
 # High-frequency Arabic particles that add little value to broad fallback matching.
 # Keep content-bearing forms such as "فيها" because they can be part of a useful phrase.
 _ARABIC_SEARCH_STOPWORDS = {
-    "و", "ف", "ثم", "او", "أو", "بل", "قد", "لا", "لم", "لن", "ما",
+    "و", "ف", "ثم", "او", "أو", "بل", "قد",
     "من", "في", "عن", "على", "الى", "إلى", "هو", "هي", "هم", "هن",
     "به", "بها", "له", "لها", "هذا", "هذه", "ذلك", "تلك", "كان",
     "كانت", "يكون", "تكون", "ان", "أن", "إن", "اذا", "إذا", "حيث",
-    "مثل", "مثلا", "مثلاً", "نحو", "لنحو", "عند", "مع", "كل", "غير",
-    "يجوز", "لايجوز", "ولا", "وهو", "وهي",
+    "مثل", "مثلا", "مثلاً", "نحو", "لنحو", "عند", "مع", "كل",
+    "وهو", "وهي",
+}
+
+# Legal polarity and ruling terms must not be discarded as ordinary stopwords.
+# A query containing a negation is constrained to passages containing that
+# polarity token, so "لا يجوز" cannot silently become a search for "يجوز".
+_ARABIC_POLARITY_TOKENS = {
+    "لا", "لم", "لن", "ما", "ليس", "ليست", "ليسوا", "غير", "عدم",
+    "ولا", "فلا", "ولم", "ولن", "فلم", "فلن", "لايجوز",
 }
 
 
@@ -111,6 +119,11 @@ def _arabic_token_variants(token: str) -> list[str]:
     """Return conservative spelling variants for one Arabic search token."""
     variants = [token]
     base = token
+    if token in {"ولا", "فلا", "ولم", "ولن", "فلم", "فلن"}:
+        base = token[1:]
+        variants.append(base)
+    elif token.startswith("لا") and len(token) > 4:
+        variants.append(token[2:])
     if len(base) > 4 and base[0] in {"و", "ف"}:
         base = base[1:]
         variants.append(base)
@@ -130,6 +143,7 @@ def build_arabic_fallback_search(query: str) -> tuple[str, list[str], int]:
     raw_tokens = re.findall(r"[\w]+", normalized, flags=re.UNICODE)
     groups = []
     seen = set()
+    polarity_groups = set()
     for token in raw_tokens:
         if token in _ARABIC_SEARCH_STOPWORDS or len(token) < 2:
             continue
@@ -140,13 +154,24 @@ def build_arabic_fallback_search(query: str) -> tuple[str, list[str], int]:
         if group not in seen:
             seen.add(group)
             groups.append(group)
+            if token in _ARABIC_POLARITY_TOKENS:
+                polarity_groups.add(group)
 
     if not groups:
         return "", [], 0
 
-    tsquery = " | ".join(f"({group})" for group in groups)
+    # Preserve ruling polarity: negation groups are mandatory, while the
+    # remaining content terms form the normal broad-recall OR group.
+    optional_groups = [group for group in groups if group not in polarity_groups]
+    query_groups = [f"({group})" for group in sorted(polarity_groups)]
+    if optional_groups:
+        query_groups.append(f"({' | '.join(optional_groups)})")
+    tsquery = " & ".join(query_groups)
+
     if len(groups) < 3:
         minimum_matches = 1
     else:
         minimum_matches = max(2, (len(groups) + 1) // 2)
+    if polarity_groups and len(groups) >= 2:
+        minimum_matches = max(2, minimum_matches)
     return tsquery, groups, minimum_matches
