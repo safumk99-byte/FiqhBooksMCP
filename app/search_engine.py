@@ -48,6 +48,7 @@ def search_library(
                     SELECT
                         'epub'::text AS source_type,
                         p.id::text AS source_id,
+                        p.id::bigint AS source_record_id,
                         b.id::bigint AS local_book_id,
                         b.title AS book_title,
                         e.title AS edition_title,
@@ -111,6 +112,7 @@ def search_library(
                     SELECT
                         'turath'::text AS source_type,
                         concat(p.turath_book_id, ':', p.turath_page_id, ':', s.segment_order) AS source_id,
+                        s.id::bigint AS source_record_id,
                         NULL::bigint AS local_book_id,
                         p.book_title,
                         NULL::text AS edition_title,
