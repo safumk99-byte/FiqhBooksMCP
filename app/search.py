@@ -70,7 +70,7 @@ def expand_search_query(query: str) -> list[str]:
         # Match complete words/phrases only; e.g. "jam" must not match
         # inside "jamak", and short aliases must not trigger accidentally.
         if re.search(
-            rf"(?<!\\w){re.escape(normalized_phrase)}(?!\\w)",
+            rf"(?<!\w){re.escape(normalized_phrase)}(?!\w)",
             lowered,
             flags=re.UNICODE,
         ):
