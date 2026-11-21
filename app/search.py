@@ -66,7 +66,14 @@ def expand_search_query(query: str) -> list[str]:
     candidates = [original]
     lowered = original.casefold()
     for phrase, expansion in _QUERY_EXPANSIONS.items():
-        if normalize_arabic_text(phrase).casefold() in lowered:
+        normalized_phrase = normalize_arabic_text(phrase).casefold()
+        # Match complete words/phrases only; e.g. "jam" must not match
+        # inside "jamak", and short aliases must not trigger accidentally.
+        if re.search(
+            rf"(?<!\w){re.escape(normalized_phrase)}(?!\w)",
+            lowered,
+            flags=re.UNICODE,
+        ):
             candidates.append(normalize_arabic_text(expansion))
 
     return list(dict.fromkeys(item for item in candidates if item))
@@ -110,7 +117,7 @@ _ARABIC_SEARCH_STOPWORDS = {
 # A query containing a negation is constrained to passages containing that
 # polarity token, so "لا يجوز" cannot silently become a search for "يجوز".
 _ARABIC_POLARITY_TOKENS = {
-    "لا", "لم", "لن", "ما", "ليس", "ليست", "ليسوا", "غير", "عدم",
+    "لا", "لم", "لن", "ليس", "ليست", "ليسوا", "غير", "عدم",
     "ولا", "فلا", "ولم", "ولن", "فلم", "فلن", "لايجوز",
 }
 

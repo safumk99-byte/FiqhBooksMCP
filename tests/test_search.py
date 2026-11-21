@@ -120,3 +120,21 @@ def test_compound_negation_is_expanded_to_its_negation_particle():
     assert "(ولا:* | لا:*)" in query
     assert "يجوز:*" in query
     assert minimum == 2
+
+
+
+def test_query_expansions_match_complete_words_not_substrings():
+    from app.search import expand_search_query
+
+    assert "جمع" in expand_search_query("jam")
+    assert "جمع" in expand_search_query("jamak")
+    assert "جمع الصلاة السفر" in expand_search_query("jamak solat musafir")
+
+
+def test_interrogative_ma_is_not_forced_as_a_negation_particle():
+    from app.search import build_arabic_fallback_search
+
+    query, groups, minimum = build_arabic_fallback_search("ما حكم الصلاة")
+
+    assert "(ما:*)" not in query
+    assert "(ما:*) &" not in query
