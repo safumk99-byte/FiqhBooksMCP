@@ -77,8 +77,9 @@ def test_arabic_fallback_ignores_common_particles_and_keeps_key_terms():
     assert "يقطر:*" in query
     assert "بوله:*" in query
     assert "السلس:* | سلس:*" in query
-    assert len(groups) == 8
-    assert minimum == 4
+    assert "(ولا:* | لا:*)" in query
+    assert len(groups) == 10
+    assert minimum == 5
 
 
 def test_arabic_fallback_counts_variants_as_one_original_term():
@@ -88,3 +89,34 @@ def test_arabic_fallback_counts_variants_as_one_original_term():
     assert len(groups) == 4
     assert minimum == 2
     assert groups[0] == "والسلس:* | السلس:* | سلس:*"
+
+
+
+def test_arabic_legal_negation_is_preserved_and_required():
+    from app.search import build_arabic_fallback_search
+
+    query, groups, minimum = build_arabic_fallback_search("لا يجوز")
+
+    assert query == "(لا:*) & (يجوز:*)"
+    assert groups == ["لا:*", "يجوز:*"]
+    assert minimum == 2
+
+
+def test_arabic_ruling_verb_is_not_discarded_as_a_stopword():
+    from app.search import build_arabic_fallback_search
+
+    query, groups, minimum = build_arabic_fallback_search("يجوز")
+
+    assert query == "(يجوز:*)"
+    assert groups == ["يجوز:*"]
+    assert minimum == 1
+
+
+def test_compound_negation_is_expanded_to_its_negation_particle():
+    from app.search import build_arabic_fallback_search
+
+    query, groups, minimum = build_arabic_fallback_search("ولا يجوز")
+
+    assert "(ولا:* | لا:*)" in query
+    assert "يجوز:*" in query
+    assert minimum == 2
