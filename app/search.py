@@ -137,6 +137,17 @@ def _arabic_token_variants(token: str) -> list[str]:
     if len(base) > 4 and base.startswith("ال"):
         variants.append(base[2:])
 
+    # Resolve common attached prepositions only when they precede the
+    # definite article, avoiding blind removal from ordinary root letters.
+    for form in list(variants):
+        if len(form) > 5 and form.startswith(("بال", "كال")):
+            variants.append(form[1:])
+        elif len(form) > 4 and form.startswith("لل"):
+            variants.append(form[2:])
+    for form in list(variants):
+        if len(form) > 4 and form.startswith("ال"):
+            variants.append(form[2:])
+
     # Conservative Arabic sound-plural normalization. Keep the original and
     # article-stripped forms, then add stems for common masculine/feminine
     # plural endings. Each token still counts as one coverage group.
