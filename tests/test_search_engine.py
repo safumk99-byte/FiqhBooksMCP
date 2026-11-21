@@ -74,6 +74,12 @@ def test_unified_search_merges_epub_and_turath_and_prefers_phrase_match(monkeypa
     assert len(fake_conn.calls) == 1
     assert "UNION ALL" in fake_conn.calls[0][0]
     assert "coverage.matched_terms" in fake_conn.calls[0][0]
+    assert "phraseto_tsquery" in fake_conn.calls[0][0]
+    assert "strpos(" not in fake_conn.calls[0][0]
+    assert fake_conn.calls[0][1][1:3] == (
+        "ولا يجوز لمن به سلس البول أن يعلق قارورة يقطر فيها",
+        "ولا يجوز لمن به سلس البول أن يعلق قارورة يقطر فيها",
+    )
 
 
 def test_unified_search_deduplicates_same_source_record_across_expansions(monkeypatch):
