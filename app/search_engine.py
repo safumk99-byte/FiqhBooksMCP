@@ -71,7 +71,7 @@ def search_library(
                         %s::integer AS total_terms,
                         CASE
                             WHEN cardinality(regexp_split_to_array(
-                                btrim(fiqh_normalize_arabic(%s)), '\\s+'
+                                btrim(fiqh_normalize_arabic(%s)), '[[:space:]]+'
                             )) >= 2
                              AND p.search_vector_ar @@ phraseto_tsquery(
                                 'simple', fiqh_normalize_arabic(%s)
@@ -134,7 +134,7 @@ def search_library(
                         %s::integer AS total_terms,
                         CASE
                             WHEN cardinality(regexp_split_to_array(
-                                btrim(fiqh_normalize_arabic(%s)), '\\s+'
+                                btrim(fiqh_normalize_arabic(%s)), '[[:space:]]+'
                             )) >= 2
                              AND s.search_vector_ar @@ phraseto_tsquery(
                                 'simple', fiqh_normalize_arabic(%s)
