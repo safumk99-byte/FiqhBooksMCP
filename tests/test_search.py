@@ -158,3 +158,13 @@ def test_arabic_plural_variants_count_as_one_search_term_group():
     assert len(groups) == 1
     assert "مسافر:*" in query
     assert minimum == 1
+
+
+
+def test_arabic_preposition_prefixes_preserve_the_base_search_term():
+    from app.search import _arabic_token_variants
+
+    assert "النجاسة" in _arabic_token_variants("بالنجاسة")
+    assert "نجاسة" in _arabic_token_variants("بالنجاسة")
+    assert "نجاسة" in _arabic_token_variants("للنجاسة")
+    assert "النجاسة" in _arabic_token_variants("وبالنجاسة")
